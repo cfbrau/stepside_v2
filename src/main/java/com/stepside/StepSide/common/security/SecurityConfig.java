@@ -50,7 +50,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOriginPatterns(List.of(
-                "https://api.run.app",
+                "https://stepside-backend-v2-921706262238.southamerica-east1.run.app",
                 "http://127.0.0.1:5500",
                 "http://localhost:[*]"
         ));
