@@ -3,10 +3,13 @@ package com.stepside.StepSide.auth.service.impl;
 import com.stepside.StepSide.auth.dto.CreateUserRequest;
 import com.stepside.StepSide.auth.dto.CreateUserResponse;
 import com.stepside.StepSide.auth.service.AuthService;
+import com.stepside.StepSide.common.security.JwtProvider;
 import com.stepside.StepSide.notification.dto.EmailMessageDto;
 import com.stepside.StepSide.notification.service.EmailService;
 import com.stepside.StepSide.ttos.model.Tto;
 import com.stepside.StepSide.ttos.repository.TtoRepository;
+import com.stepside.StepSide.users.dto.AuthResponseDTO;
+import com.stepside.StepSide.users.dto.LoginRequestDTO;
 import com.stepside.StepSide.users.model.User;
 import com.stepside.StepSide.users.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -14,13 +17,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 
 /**
  * Implementación de alta gama para el control de accesos y Onboarding en MongoDB Atlas.
@@ -34,6 +31,7 @@ public class AuthServiceImpl implements AuthService {
     private final TtoRepository ttoRepository;
     private final EmailService emailService;
     private final PasswordEncoder passwordEncoder;
+    private final JwtProvider jwtProvider;
 
     @Override
     public CreateUserResponse signUp(CreateUserRequest request) {
@@ -152,5 +150,28 @@ public class AuthServiceImpl implements AuthService {
         emailService.sendEmail(alertDto);
 
         return new CreateUserResponse(savedUser.getId(), savedUser.getEmail(), savedPerson.getId(), savedCompany.getId());
+    }
+
+    @Override
+    public AuthResponseDTO login(LoginRequestDTO request) {
+        // 1. Buscar al usuario de forma inquebrantable por su email único
+        User user = userRepository.findByEmail(request.email())
+                .orElseThrow(() -> new NoSuchElementException("Credenciales inválidas: El email no se encuentra registrado."));
+
+        // 2. Control de Integridad: Verificar si la cuenta no está bloqueada o inactiva
+        if (user.getStatusName() != null && "LOCKED".equalsIgnoreCase(user.getStatusName())) {
+            throw new IllegalStateException("Acceso denegado: La cuenta de usuario se encuentra bloqueada.");
+        }
+
+        // 3. Validación de contraseñas: Contrastamos el texto plano contra el hash BCrypt
+        if (!passwordEncoder.matches(request.password(), user.getPassword())) {
+            throw new IllegalArgumentException("Credenciales inválidas: La contraseña provista es incorrecta.");
+        }
+
+        // 4. Criptografía: Emitimos el token JWT firmado de 8 horas utilizando el email del usuario
+        String token = jwtProvider.generateToken(user.getEmail());
+
+        // Retornamos el DTO de salida estándar
+        return new AuthResponseDTO(token, "Bearer", user.getEmail());
     }
 }

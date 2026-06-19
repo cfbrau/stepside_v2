@@ -1,4 +1,4 @@
-package com.stepside.StepSide.common.security; // <-- Centralizado en el núcleo de infraestructura
+package com.stepside.StepSide.common.security;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -9,6 +9,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -17,18 +18,21 @@ import java.util.List;
 /**
  * El Único Candado Perimetral de StepSide.
  * Gobierna de forma centralizada las reglas de acceso BSON, CORS y filtros stateless.
+ * Saneado por el Arquitecto para acoplar el ruteo seguro por tokens JWT.
  */
 @Configuration
 @EnableWebSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
+    private final JwtFilter jwtFilter; // Inyección de nuestro nuevo filtro asíncrono
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // CORRECCIÓN CRÍTICA: Desactivamos el filtro CSRF mandatorio para APIs Stateless en la nube
+                // SANEAMIENTO MANDATORIO: Desactivamos CSRF ya que la autenticación viaja encapsulada en la cabecera Bearer
                 .csrf(csrf -> csrf.disable())
-                
+
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
@@ -36,11 +40,16 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/auth/signup",
                                 "/api/auth/login",
-                                "/api/auth/forgot-password/**",
-                                "/api/users/**"
+                                "/api/auth/forgot-password/**"
                         ).permitAll()
-                        .anyRequest().authenticated() // Cierre hermético para dashboards y telemetría
-                );
+
+                        // Los endpoints de /api/users ya NO son públicos de libre acceso, requieren Token válido
+                        .requestMatchers("/api/users/**").authenticated()
+
+                        .anyRequest().authenticated()
+                )
+                // Inyectamos nuestro JwtFilter justo antes del filtro de autenticación por defecto de Spring
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
@@ -66,10 +75,6 @@ public class SecurityConfig {
         return source;
     }
 
-    /**
-     * BEAN DE CONVERSOR: Habilita el cifrado simétrico BCrypt requerido
-     * en tu TtoRegistrationServiceImpl para hashear las claves.
-     */
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();

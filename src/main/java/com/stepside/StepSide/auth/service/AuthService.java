@@ -2,6 +2,8 @@ package com.stepside.StepSide.auth.service;
 
 import com.stepside.StepSide.auth.dto.CreateUserRequest;
 import com.stepside.StepSide.auth.dto.CreateUserResponse;
+import com.stepside.StepSide.users.dto.AuthResponseDTO;
+import com.stepside.StepSide.users.dto.LoginRequestDTO;
 //import com.stepside.StepSide.auth.dto.LoginRequest;
 //import com.stepside.StepSide.auth.dto.LoginResponse;
 //import com.stepside.StepSide.auth.dto.ForgotPasswordRequest;
@@ -25,12 +27,12 @@ public interface AuthService {
     CreateUserResponse signUp(CreateUserRequest request);
 
     /**
-     * Procesa la autenticación del usuario validando credenciales y estados de seguridad.
+     * Valida las credenciales del usuario y genera un token de acceso JWT.
      *
-     * @param request Payload inmutable con las credenciales de acceso.
-     * @return LoginResponse con el token JWT emitido y estado actual de la cuenta.
+     * @param request Datos de acceso (email y contraseña cruda).
+     * @return DTO con el token JWT emitido.
      */
-    //LoginResponse login(LoginRequest request);
+    AuthResponseDTO login(LoginRequestDTO request);
 
     /**
      * Procesa la solicitud de recuperación de contraseña.

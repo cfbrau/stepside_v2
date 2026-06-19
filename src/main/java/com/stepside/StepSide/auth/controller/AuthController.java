@@ -3,6 +3,8 @@ package com.stepside.StepSide.auth.controller;
 import com.stepside.StepSide.auth.dto.CreateUserRequest;
 import com.stepside.StepSide.auth.dto.CreateUserResponse;
 import com.stepside.StepSide.auth.service.AuthService;
+import com.stepside.StepSide.users.dto.AuthResponseDTO;
+import com.stepside.StepSide.users.dto.LoginRequestDTO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -33,5 +35,15 @@ public class AuthController {
 
         CreateUserResponse response = authService.signUp(requestDto);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+
+    /**
+     * POST /api/auth/login
+     * Endpoint público para validar identidades corporativas y obtener el token Bearer.
+     */
+    @PostMapping("/login")
+    public ResponseEntity<AuthResponseDTO> login(@Valid @RequestBody LoginRequestDTO requestDto) {
+        AuthResponseDTO response = authService.login(requestDto);
+        return ResponseEntity.ok(response);
     }
 }
