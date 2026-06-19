@@ -26,8 +26,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                //.cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                .csrf(csrf -> csrf.disable()) // Stateless para APIs NoSQL
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         // Compuertas públicas del ecosistema unificado
@@ -49,21 +48,15 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        //configuration.setAllowedOriginPatterns(List.of(
-        //        "https://stepside-backend-v2-921706262238.southamerica-east1.run.app",
-        //        "http://127.0.0.1:5500",
-        //        "http://localhost:[*]"
-        //));
-        // Permitimos todos los orígenes externos para desarrollo y Postman de forma segura en entornos cloud
-        configuration.setAllowedOriginPatterns(List.of("*"));
+        configuration.setAllowedOriginPatterns(List.of(
+                "https://stepside-backend-v2-921706262238.southamerica-east1.run.app",
+                "http://127.0.0.1:5500",
+                "http://localhost:[*]"
+        ));
 
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Cache-Control", "X-Requested-With"));
-
-        //configuration.setAllowCredentials(true);
-        // CRÍTICO: Si usas AllowedOriginPatterns con "*", AllowCredentials DEBE ser false,
-        // de lo contrario Spring Security arroja un error de inicialización o bloqueos 403 genéricos.
-        configuration.setAllowCredentials(false);
+        configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
