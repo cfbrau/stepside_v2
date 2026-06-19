@@ -40,11 +40,29 @@ public class JwtFilter extends OncePerRequestFilter {
                 String email = jwtProvider.getEmailFromToken(token);
 
                 // 4. Si el contexto actual de Spring Security no está autenticado, inyectamos las credenciales
+                /*
                 if (SecurityContextHolder.getContext().getAuthentication() == null) {
 
                     // Instanciamos el token de autenticación pasándole el email (sin roles/autoridades por ahora = Collections.emptyList())
                     UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                             email, null, Collections.emptyList()
+                    );
+
+                    authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+
+                    // Seteamos de forma atómica la identidad del usuario en el hilo actual de ejecución
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                }
+                */
+                if (SecurityContextHolder.getContext().getAuthentication() == null) {
+
+                    // Creamos una autoridad real de Spring Security para el usuario autenticado
+                    org.springframework.security.core.authority.SimpleGrantedAuthority authority =
+                            new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER");
+
+                    // Instanciamos el token pasándole la lista que contiene el rol básico
+                    UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                            email, null, java.util.List.of(authority)
                     );
 
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
