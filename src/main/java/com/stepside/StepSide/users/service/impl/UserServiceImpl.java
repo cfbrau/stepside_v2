@@ -11,6 +11,8 @@ import com.stepside.StepSide.notification.service.EmailService;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.bson.types.ObjectId;
+import org.slf4j.Logger; // SINCRO: Import nativo de la interfaz de SLF4J
+import org.slf4j.LoggerFactory; // SINCRO: Import de la fábrica de Loggers nativa
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -18,6 +20,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -26,13 +29,15 @@ import java.util.NoSuchElementException;
 
 /**
  * Orquestador de lógica de negocio para usuarios y workflows de aprobación NoSQL.
- * Saneado por el Arquitecto para inyectar correctamente las dependencias de infraestructura.
+ * Centraliza las transiciones de estado y la persistencia relacional de aplicaciones asignadas.
  */
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
 
-    // Inyecciones atómicas obligatorias gestionadas por @RequiredArgsConstructor de Lombok
+    // Instanciación explícita del Logger perimetral para eludir fallos del build de Lombok
+    private static final Logger log = LoggerFactory.getLogger(UserServiceImpl.class);
+
     private final UserRepository userRepository;
     private final MongoTemplate mongoTemplate;
     private final EmailService emailService;
@@ -50,45 +55,87 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public void approveUser(String ttoId, UserApprovalRequestDTO request) {
-        // 1. ESCUDO DEFENSIVO: Si el mapa de permisos viene vacío, aborta en el acto
+        // 1. ESCUDO DEFENSIVO: Si el payload de permisos viene vacío, aborta en el acto
         if (request.permissions() == null || request.permissions().isEmpty()) {
             throw new IllegalArgumentException("Validación fallida: Se requiere la asignación de al menos una aplicación para proceder.");
         }
 
-        // 2. CONSTRUCCIÓN DE LA CONSULTA: Buscamos al usuario por su 'ttoId' lógico (String en base de datos)
-        org.springframework.data.mongodb.core.query.Query userQuery = new org.springframework.data.mongodb.core.query.Query(
-                new org.springframework.data.mongodb.core.query.Criteria().orOperator(
-                        org.springframework.data.mongodb.core.query.Criteria.where("ttoId").is(ttoId),
-                        org.springframework.data.mongodb.core.query.Criteria.where("_id").is(
-                                org.bson.types.ObjectId.isValid(ttoId) ? new org.bson.types.ObjectId(ttoId) : ttoId
-                        )
+        // 2. CONSTRUCCIÓN DE LA CONSULTA: Localizar al usuario por ttoId o por _id primario
+        Query userQuery = new Query(
+                new Criteria().orOperator(
+                        Criteria.where("ttoId").is(ttoId),
+                        Criteria.where("_id").is(ObjectId.isValid(ttoId) ? new ObjectId(ttoId) : ttoId)
                 )
         );
 
-        org.bson.Document userDoc = mongoTemplate.findOne(userQuery, org.bson.Document.class, "users");
+        Document userDoc = mongoTemplate.findOne(userQuery, Document.class, "users");
         if (userDoc == null) {
-            throw new java.util.NoSuchElementException("Usuario no encontrado en el clúster NoSQL con el identificador provisto: " + ttoId);
+            throw new NoSuchElementException("Usuario no encontrado en el clúster NoSQL con el identificador provisto: " + ttoId);
         }
+        ObjectId userId = userDoc.getObjectId("_id");
 
-        // 3. RESOLUCIÓN DINÁMICA DE ESTADO: Buscamos el _id real de 'ACTIVE' en la tabla 'user_statuses'
+        // 3. RESOLUCIÓN DINÁMICA DE ESTADO: Localizar el _id de 'ACTIVE' en la tabla 'user_statuses'
         Query statusQuery = new Query(Criteria.where("name").is("ACTIVE"));
         Document statusDoc = mongoTemplate.findOne(statusQuery, Document.class, "user_statuses");
         if (statusDoc == null) {
-            throw new IllegalStateException("Error de consistencia: No se localizó el estado 'ACTIVE' en la colección user_status.");
+            throw new IllegalStateException("Error de consistencia: No se localizó el estado 'ACTIVE' en la colección user_statuses.");
         }
         ObjectId activeStatusId = statusDoc.getObjectId("_id");
 
-        // 4. CONTROL DE INTEGRIDAD: Validamos si la cuenta ya posee asignado el ID del estado activo
+        // 4. CONTROL DE INTEGRIDAD: Validar si la cuenta ya está aprobada
         if (activeStatusId.equals(userDoc.get("status_id"))) {
             throw new IllegalArgumentException("Operación inválida: La cuenta de usuario ya se encuentra aprobada y en estado ACTIVO.");
         }
 
-        // 5. PROTOCOLO DE MUTACIÓN ATÓMICA DIRECTA sobre la colección de usuarios
+        // 5. RESOLUCIÓN MASIVA DE APLICACIONES Y ROLES
+        Map<String, String> incomingPermissions = request.permissions();
+
+        Query appsQuery = new Query(Criteria.where("name").in(incomingPermissions.keySet()));
+        List<Document> fetchedApps = mongoTemplate.find(appsQuery, Document.class, "applications");
+
+        List<Document> userApplicationsToInsert = new ArrayList<>();
+
+        for (Document appDoc : fetchedApps) {
+            ObjectId appId = appDoc.getObjectId("_id");
+            String appName = appDoc.getString("name");
+            String targetRoleName = incomingPermissions.get(appName);
+
+            // Con el ID de la aplicación y el nombre del rol, buscamos el Rol correspondiente
+            Query roleQuery = new Query(Criteria.where("app_id").is(appId).and("name").is(targetRoleName));
+            Document roleDoc = mongoTemplate.findOne(roleQuery, Document.class, "roles");
+
+            if (roleDoc != null) {
+                ObjectId roleId = roleDoc.getObjectId("_id");
+
+                // Construimos el documento pivote respetando milimétricamente tu JSON de producción
+                Document userAppDoc = new Document()
+                        .append("user_id", userId)
+                        .append("appId", appId.toString())
+                        .append("role_id", roleId)
+                        .append("assignedAt", new Date())
+                        .append("_class", "com.minorityreport.portal.auth.model.UserApplication");
+
+                userApplicationsToInsert.add(userAppDoc);
+            } else {
+                log.warn("No se localizó el rol '{}' asignado para la aplicación '{}' en la base de datos.", targetRoleName, appName);
+            }
+        }
+
+        // Si no se pudo resolver ninguna aplicación o rol válido, abortamos antes de romper la integridad
+        if (userApplicationsToInsert.isEmpty()) {
+            throw new IllegalArgumentException("Validación fallida: Ninguna de las combinaciones de Aplicación y Rol provistas es válida en los catálogos.");
+        }
+
+        // 6. PROTOCOLO DE PERSISTENCIA Y MUTACIÓN EN BOTELLA ATÓMICA
+        // A) Insertamos masivamente los permisos resueltos en user_applications
+        mongoTemplate.insert(userApplicationsToInsert, "user_applications");
+
+        // B) Transicionamos el estado de la cuenta del usuario a ACTIVE
         Update update = new Update();
-        update.set("status_id", activeStatusId);      // Relación indexada lógica
-        update.set("status_name", "ACTIVE");          // Redundancia controlada para retrocompatibilidad
-        update.set("failed_attempts", 0);             // Limpieza higiénica de bloqueos previos
-        update.set("updated_at", new Date());         // Estampa temporal de auditoría
+        update.set("status_id", activeStatusId);
+        update.set("status_name", "ACTIVE");
+        update.set("failed_attempts", 0);
+        update.set("updated_at", new Date());
 
         mongoTemplate.updateFirst(userQuery, update, "users");
 
@@ -106,13 +153,11 @@ public class UserServiceImpl implements UserService {
                 templateVariables
         );
 
-        // Despacho asincrónico directo
         emailService.sendEmail(emailDto);
     }
 
     @Override
     public List<CompanyUsersGroupDto> getUsersGroupedByCompany() {
-        // Espacio reservado para el requerimiento 3 a futuro
         return List.of();
     }
 }
