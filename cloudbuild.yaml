@@ -1,0 +1,23 @@
+steps:
+  # Paso 1: Compilar la imagen de Java 21 usando Buildpacks
+  - name: 'gcr.io/k8s-skaffold/pack'
+    args:
+      - 'build'
+      - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
+      - '--builder=gcr.io/buildpacks/builder:latest'
+      - '--env=GOOGLE_RUNTIME_VERSION=21'
+
+  # Paso 2: Desplegar la imagen de forma automática en tu Cloud Run
+  - name: 'gcr.io/://google.com'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'stepside-backend-v2'
+      - '--image=southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
+      - '--region=southamerica-east1'
+
+# SOLUCIÓN AL ERROR: Forzar que los logs vayan al visor web de Google
+options:
+  logging: CLOUD_LOGGING_ONLY
+  
