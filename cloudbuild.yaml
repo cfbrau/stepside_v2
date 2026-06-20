@@ -20,4 +20,3 @@ steps:
 # SOLUCIÓN AL ERROR: Forzar que los logs vayan al visor web de Google
 options:
   logging: CLOUD_LOGGING_ONLY
-  
