@@ -8,10 +8,7 @@ steps:
       - '--env=GOOGLE_RUNTIME_VERSION=21'
       - '--env=MAVEN_OPTS=-Dmaven.test.skip=true'
 
-  # Actualiza.
   # Paso 2: Desplegar la imagen de forma automática en tu Cloud Run (CORREGIDO CON BARRAS SIMPLES)
-  #- name: 'gcr.io/google.com'
-
   - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'gcloud'
     args:
@@ -24,3 +21,7 @@ steps:
 # Forzar que los logs vayan al visor web de Google
 options:
   logging: CLOUD_LOGGING_ONLY
+
+# AGREGÁ ESTO ACÁ ABAJO: Indica a Cloud Build que suba la imagen al terminar los pasos
+images:
+  - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
