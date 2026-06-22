@@ -1,14 +1,14 @@
 steps:
-  # Paso 1: Compilar la imagen de Java 21 usando Buildpacks (Con salteo de Tests preventivo)
+  # Paso 1: Compilar la imagen usando el builder correcto y saltando tests
   - name: 'gcr.io/k8s-skaffold/pack'
     args:
       - 'build'
       - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
-      - '--builder=gcr.io/buildpacks/builder:v1'
+      - '--builder=gcr.io/buildpacks/builder:latest'
       - '--env=GOOGLE_RUNTIME_VERSION=21'
-      - '--env=GOOGLE_MAVEN_ARGS=-DskipTests=true clean package'
+      - '--env=MAVEN_OPTS=-Dmaven.test.skip=true'
 
-  # Paso 2: Desplegar la imagen de forma automática en tu Cloud Run
+  # Paso 2: Desplegar en Cloud Run de forma automática
   - name: 'gcr.io/google.com'
     entrypoint: 'gcloud'
     args:
