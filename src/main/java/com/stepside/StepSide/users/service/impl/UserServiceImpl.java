@@ -11,8 +11,8 @@ import com.stepside.StepSide.notification.service.EmailService;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.bson.types.ObjectId;
-import org.slf4j.Logger; // SINCRO: Import nativo de la interfaz de SLF4J
-import org.slf4j.LoggerFactory; // SINCRO: Import de la fábrica de Loggers nativa
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -28,15 +29,10 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.stream.Collectors;
 
-/**
- * Orquestador de lógica de negocio para usuarios y workflows de aprobación NoSQL.
- * Centraliza las transiciones de estado y la persistencia relacional de aplicaciones asignadas.
- */
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
 
-    // Instanciación explícita del Logger perimetral para eludir fallos del build de Lombok
     private static final Logger log = LoggerFactory.getLogger(UserServiceImpl.class);
 
     private final UserRepository userRepository;
@@ -47,43 +43,46 @@ public class UserServiceImpl implements UserService {
     public List<UserResponseDTO> getUsersWithFilter(String status) {
         ObjectId targetStatusId = null;
 
-        if (status != null && !status.trim().isEmpty() && ObjectId.isValid(status)) {
-            targetStatusId = new ObjectId(status);
+        if (status != null && !status.trim().isEmpty()) {
+            if (ObjectId.isValid(status)) {
+                targetStatusId = new ObjectId(status);
+            } else {
+                Query statusQuery = new Query(Criteria.where("name").is(status.trim().toUpperCase()));
+                statusQuery.fields().include("_id");
+                Document statusDoc = mongoTemplate.findOne(statusQuery, Document.class, "user_statuses");
+
+                if (statusDoc != null) {
+                    targetStatusId = statusDoc.getObjectId("_id");
+                } else {
+                    return Collections.emptyList();
+                }
+            }
         }
 
         return userRepository.findAllUsersWithTto(targetStatusId);
     }
-
     @Override
-    public List<CompanyUsersGroupDto> getUsersGroupedByCompany() {
-        return List.of();
-    }
-
-    @Override
-    @org.springframework.transaction.annotation.Transactional // Garantiza que si algo falla, se aplique un rollback absoluto
+    @org.springframework.transaction.annotation.Transactional
     public void approveUser(String ttoId, UserApprovalRequestDTO request) {
-        // 1. ESCUDO DEFENSIVO: Validación perimetral temprana
         if (request.permissions() == null || request.permissions().isEmpty()) {
             throw new IllegalArgumentException("Validación fallida: Se requiere la asignación de al menos una aplicación para proceder.");
         }
 
-        // 2. RESOLUCIÓN DINÁMICA DE ESTADO PREVIA: Evita procesamiento si el catálogo está corrupto
         Query statusQuery = new Query(Criteria.where("name").is("ACTIVE"));
-        statusQuery.fields().include("_id"); // Proyección limpia: solo requerimos el ID
+        statusQuery.fields().include("_id");
         Document statusDoc = mongoTemplate.findOne(statusQuery, Document.class, "user_statuses");
         if (statusDoc == null) {
             throw new IllegalStateException("Error de consistencia: No se localizó el estado 'ACTIVE' en la colección user_statuses.");
         }
         ObjectId activeStatusId = statusDoc.getObjectId("_id");
 
-        // 3. CONSTRUCCIÓN DE LA CONSULTA Y CONTROL DE INTEGRIDAD: Localizar usuario de forma segura
         Query userQuery = new Query(
                 new Criteria().orOperator(
                         Criteria.where("ttoId").is(ttoId),
                         Criteria.where("_id").is(ObjectId.isValid(ttoId) ? new ObjectId(ttoId) : ttoId)
                 )
         );
-        userQuery.fields().include("_id", "email", "status_id"); // Proyección eficiente de RAM
+        userQuery.fields().include("_id", "email", "status_id");
 
         Document userDoc = mongoTemplate.findOne(userQuery, Document.class, "users");
         if (userDoc == null) {
@@ -95,31 +94,25 @@ public class UserServiceImpl implements UserService {
         }
         ObjectId userId = userDoc.getObjectId("_id");
 
-        // 4. RESOLUCIÓN MASIVA DE UN SOLO VIAJE (Eliminación total del problema N+1)
         Map<String, String> incomingPermissions = request.permissions();
 
-        // A) Traemos todas las aplicaciones del payload en un lote masivo
         Query appsQuery = new Query(Criteria.where("name").in(incomingPermissions.keySet()));
         appsQuery.fields().include("_id", "name");
         List<Document> fetchedApps = mongoTemplate.find(appsQuery, Document.class, "applications");
 
-        // Mapeamos los IDs de las aplicaciones encontradas para armar la query masiva de roles
         List<ObjectId> appIds = fetchedApps.stream().map(doc -> doc.getObjectId("_id")).collect(Collectors.toList());
         List<String> roleNames = new ArrayList<>(incomingPermissions.values());
 
-        // B) OPTIMIZACIÓN SUPREMA: Traemos todos los roles coincidentes de un solo viaje usando $and y $in
         Query rolesQuery = new Query(Criteria.where("app_id").in(appIds).and("name").in(roleNames));
         rolesQuery.fields().include("_id", "app_id", "name");
         List<Document> fetchedRoles = mongoTemplate.find(rolesQuery, Document.class, "roles");
 
-        // Indexamos los roles en un mapa de memoria O(1) usando una clave compuesta "appId_roleName"
         Map<String, ObjectId> roleCacheMap = fetchedRoles.stream().collect(Collectors.toMap(
                 role -> role.getObjectId("app_id").toString() + "_" + role.getString("name"),
                 role -> role.getObjectId("_id"),
                 (existing, replacement) -> existing
         ));
 
-        // 5. CONSTRUCCIÓN ASOCIATIVA EN MEMORIA
         List<Document> userApplicationsToInsert = new ArrayList<>(fetchedApps.size());
         Date currentDate = new Date();
 
@@ -128,7 +121,6 @@ public class UserServiceImpl implements UserService {
             String appName = appDoc.getString("name");
             String targetRoleName = incomingPermissions.get(appName);
 
-            // Buscamos el rol de forma instantánea en la cache local sin golpear la base de datos
             String cacheKey = appIdStr + "_" + targetRoleName;
 
             if (roleCacheMap.containsKey(cacheKey)) {
@@ -151,7 +143,6 @@ public class UserServiceImpl implements UserService {
             throw new IllegalArgumentException("Validación fallida: Ninguna de las combinaciones de Aplicación y Rol provistas es válida en el sistema.");
         }
 
-        // 6. PERSISTENCIA ATÓMICA TRANSACCIONAL
         mongoTemplate.insert(userApplicationsToInsert, "user_applications");
 
         Update update = new Update();
@@ -161,7 +152,6 @@ public class UserServiceImpl implements UserService {
         update.set("updated_at", currentDate);
         mongoTemplate.updateFirst(userQuery, update, "users");
 
-        // 7. DESPACHO ASÍNCRONO DE ALERTA (Fuera del riesgo transaccional)
         String userEmail = userDoc.getString("email");
         Map<String, Object> templateVariables = new HashMap<>();
         templateVariables.put("mail_registered_user", userEmail);
@@ -175,4 +165,74 @@ public class UserServiceImpl implements UserService {
         emailService.sendEmail(emailDto);
     }
 
+    @Override
+    public List<CompanyUsersGroupDto> getUsersGroupedByCompany() {
+        List<UserResponseDTO> allUsers = userRepository.findAllUsersWithTto(null);
+
+        Map<String, List<CompanyUsersGroupDto.UserExpandedNode>> groupedMap = new HashMap<>();
+        Map<String, String> companyNameMap = new HashMap<>();
+        Map<String, String> companyCuitMap = new HashMap<>();
+
+        String unassignedId = "UNASSIGNED";
+        groupedMap.put(unassignedId, new ArrayList<>());
+        companyNameMap.put(unassignedId, "Usuarios sin Organización");
+        companyCuitMap.put(unassignedId, "00-00000000-0");
+
+        for (UserResponseDTO user : allUsers) {
+            boolean hasCompany = false;
+
+            if (user.personRelations() != null && !user.personRelations().isEmpty()) {
+                for (Map<String, Object> rel : user.personRelations()) {
+                    Object parentIdObj = rel.get("parent_id");
+                    Object companyNameObj = rel.get("related_name");
+                    Object companyCuitObj = rel.get("code");
+
+                    if (parentIdObj != null) {
+                        String compId = parentIdObj.toString();
+                        String compName = companyNameObj != null ? companyNameObj.toString() : "UNKNOWN_COMPANY";
+                        String compCuit = companyCuitObj != null ? companyCuitObj.toString() : "N/A";
+
+                        CompanyUsersGroupDto.UserExpandedNode employeeNode = new CompanyUsersGroupDto.UserExpandedNode(
+                                user.id(),
+                                user.email(),
+                                user.status(),
+                                (user.personName() != null ? user.personName() : "") + " " + (user.personApellido() != null ? user.personApellido() : ""),
+                                user.personCode() != null ? user.personCode() : ""
+                        );
+
+                        groupedMap.computeIfAbsent(compId, k -> new ArrayList<>()).add(employeeNode);
+                        companyNameMap.putIfAbsent(compId, compName);
+                        companyCuitMap.putIfAbsent(compId, compCuit);
+                        hasCompany = true;
+                    }
+                }
+            }
+
+            if (!hasCompany) {
+                CompanyUsersGroupDto.UserExpandedNode standaloneNode = new CompanyUsersGroupDto.UserExpandedNode(
+                        user.id(),
+                        user.email(),
+                        user.status(),
+                        (user.personName() != null ? user.personName() : "") + " " + (user.personApellido() != null ? user.personApellido() : ""),
+                        user.personCode() != null ? user.personCode() : ""
+                );
+                groupedMap.get(unassignedId).add(standaloneNode);
+            }
+        }
+
+        if (groupedMap.get(unassignedId).isEmpty()) {
+            groupedMap.remove(unassignedId);
+            companyNameMap.remove(unassignedId);
+            companyCuitMap.remove(unassignedId);
+        }
+
+        return groupedMap.entrySet().stream()
+                .map(entry -> new CompanyUsersGroupDto(
+                        entry.getKey(),
+                        companyCuitMap.get(entry.getKey()),
+                        companyNameMap.get(entry.getKey()),
+                        entry.getValue()
+                ))
+                .collect(Collectors.toList());
+    }
 }

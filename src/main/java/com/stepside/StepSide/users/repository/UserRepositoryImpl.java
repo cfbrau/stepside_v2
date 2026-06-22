@@ -15,11 +15,6 @@ import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Implementación de infraestructura híbrida optimizada para el Backoffice.
- * Resuelve las relaciones jerárquicas en memoria de Java para garantizar
- * la máxima estabilidad y velocidad de procesamiento.
- */
 @Repository
 public class UserRepositoryImpl implements UserRepositoryCustom {
 
@@ -56,7 +51,7 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
         // 3. Consultar la tabla de TTOs primarios (Personas)
         String ttoCollection = mongoTemplate.getCollectionName(Tto.class);
         Query primaryTtoQuery = new Query(Criteria.where("_id").in(primaryTtoIds));
-        primaryTtoQuery.fields().include("_id", "attributes", "relations");
+        primaryTtoQuery.fields().include("_id", "code", "attributes", "relations");
         List<Document> primaryTtosRaw = mongoTemplate.find(primaryTtoQuery, Document.class, ttoCollection);
 
         Map<String, Document> primaryTtoMap = primaryTtosRaw.stream()
@@ -83,14 +78,13 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
         }
 
         // 5. Carga en Batch de catálogos relacionales ($in)
-        // Resolver nombres de Estados de usuario
+        // Resolver nombres de Estados de usuario contra la tabla real de la base
         Query statusQuery = new Query(Criteria.where("_id").in(statusIds));
-        statusQuery.fields().include("_id", "name");
         List<Document> statusRaw = mongoTemplate.find(statusQuery, Document.class, "user_statuses");
         Map<String, String> statusMap = statusRaw.stream()
                 .collect(Collectors.toMap(doc -> doc.get("_id").toString(), doc -> doc.getString("name"), (e, r) -> e));
 
-        // Resolver descripciones de la colección 'relations_types'
+        // CORRECCIÓN SEGURO: Apuntamos exactamente a la colección real de tu cluster: "relation_types"
         Map<String, String> relationTypeMap = new HashMap<>();
         if (!relationTypeIds.isEmpty()) {
             Query relTypeQuery = new Query(Criteria.where("_id").in(relationTypeIds));
@@ -102,22 +96,28 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
             ));
         }
 
-        // Resolver nombres de empresas asociadas (usando parent_id de la tabla tto)
+        // Resolver nombres y CUITs de empresas asociadas
         Map<String, String> companyMap = new HashMap<>();
+        Map<String, String> companyCuitMap = new HashMap<>();
+
         if (!parentCompanyIds.isEmpty()) {
             Query companyQuery = new Query(Criteria.where("_id").in(parentCompanyIds));
-            companyQuery.fields().include("_id", "description", "attributes.nombre", "attributes.razon_social");
+            companyQuery.fields().include("_id", "code", "description", "attributes.nombre", "attributes.razon_social");
             List<Document> companiesRaw = mongoTemplate.find(companyQuery, Document.class, ttoCollection);
-            companyMap = companiesRaw.stream().collect(Collectors.toMap(
-                    doc -> doc.get("_id").toString(),
-                    doc -> {
-                        Document attrs = (Document) doc.get("attributes");
-                        if (attrs != null && attrs.getString("nombre") != null) return attrs.getString("nombre");
-                        if (attrs != null && attrs.getString("razon_social") != null) return attrs.getString("razon_social");
-                        return doc.getString("description") != null ? doc.getString("description") : "EMPRESA_SIN_NOMBRE";
-                    },
-                    (e, r) -> e
-            ));
+
+            for (Document doc : companiesRaw) {
+                String compIdStr = doc.get("_id").toString();
+                String compCuit = doc.getString("code") != null ? doc.getString("code") : "N/A";
+                companyCuitMap.put(compIdStr, compCuit);
+
+                Document attrs = (Document) doc.get("attributes");
+                String compName = "EMPRESA_SIN_NOMBRE";
+                if (attrs != null && attrs.getString("nombre") != null) compName = attrs.getString("nombre");
+                else if (attrs != null && attrs.getString("razon_social") != null) compName = attrs.getString("razon_social");
+                else if (doc.getString("description") != null) compName = doc.getString("description");
+
+                companyMap.put(compIdStr, compName);
+            }
         }
 
         // 6. Ensamble final de DTOs en memoria de Java
@@ -125,6 +125,7 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
 
         for (User user : users) {
             String personTtoId = null;
+            String personCode = null;
             String personApellido = null;
             String personName = null;
             List<Map<String, Object>> enrichedRelations = null;
@@ -132,6 +133,7 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
             if (user.getTtoId() != null && primaryTtoMap.containsKey(user.getTtoId())) {
                 Document ttoDoc = primaryTtoMap.get(user.getTtoId());
                 personTtoId = ttoDoc.get("_id").toString();
+                personCode = ttoDoc.getString("code");
 
                 Document attributes = (Document) ttoDoc.get("attributes");
                 if (attributes != null) {
@@ -152,8 +154,17 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
 
                         // Mapeo del Nombre de la Empresa utilizando parent_id
                         Object parentId = rel.get("parent_id");
-                        String companyName = (parentId != null) ? companyMap.getOrDefault(parentId.toString(), "UNKNOWN_COMPANY") : "UNKNOWN_COMPANY";
+                        String compIdStr = parentId != null ? parentId.toString() : null;
+
+                        String companyName = (compIdStr != null) ? companyMap.getOrDefault(compIdStr, "UNKNOWN_COMPANY") : "UNKNOWN_COMPANY";
                         relMap.put("related_name", companyName);
+
+                        String companyCuit = (compIdStr != null) ? companyCuitMap.getOrDefault(compIdStr, "N/A") : "N/A";
+                        relMap.put("code", companyCuit);
+
+                        // FIX HIGIENE: Removemos del mapa final las claves internas redundantes para el Frontend
+                        relMap.remove("relation_type_id");
+                        relMap.remove("code");
 
                         enrichedRelations.add(relMap);
                     }
@@ -178,6 +189,7 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
                     expInstant,
                     createdInstant,
                     personTtoId,
+                    personCode,
                     personApellido,
                     personName,
                     enrichedRelations

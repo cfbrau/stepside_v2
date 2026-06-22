@@ -42,7 +42,6 @@ public class UserController {
      */
     @GetMapping("/grouped-by-company")
     public ResponseEntity<List<CompanyUsersGroupDto>> getUsersGroupedByCompany() {
-
         List<CompanyUsersGroupDto> response = userService.getUsersGroupedByCompany();
         return ResponseEntity.ok(response);
     }
