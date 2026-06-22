@@ -8,7 +8,7 @@ steps:
       - '--env=GOOGLE_RUNTIME_VERSION=21'
 
   # Paso 2: Desplegar la imagen de forma automática en tu Cloud Run (CORREGIDO CON BARRAS SIMPLES)
-  - name: 'gcr.io/://google.com'
+  - name: 'gcr.io/google.com'
     entrypoint: 'gcloud'
     args:
       - 'run'
