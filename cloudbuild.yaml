@@ -8,7 +8,13 @@ steps:
       - '--env=GOOGLE_RUNTIME_VERSION=21'
       - '--env=MAVEN_OPTS=-Dmaven.test.skip=true'
 
-  # Paso 2: Desplegar la imagen de forma automática en tu Cloud Run (CORREGIDO CON BARRAS SIMPLES)
+  # NUEVO PASO INTERMEDIO: Forzar la subida a Artifact Registry antes del deploy
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
+
+  # Paso 3: Desplegar en Cloud Run (Ahora sí la imagen ya va a estar en la nube)
   - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'gcloud'
     args:
@@ -18,10 +24,9 @@ steps:
       - '--image=southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
       - '--region=southamerica-east1'
 
-# Forzar que los logs vayan al visor web de Google
 options:
   logging: CLOUD_LOGGING_ONLY
 
-# AGREGÁ ESTO ACÁ ABAJO: Indica a Cloud Build que suba la imagen al terminar los pasos
+# Podés dejar esto también como buena práctica para el registro de Cloud Build
 images:
   - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
