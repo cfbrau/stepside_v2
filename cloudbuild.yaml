@@ -8,7 +8,7 @@ steps:
       - '--env=GOOGLE_RUNTIME_VERSION=21'
       - '--env=MAVEN_OPTS=-Dmaven.test.skip=true'
 
-  # NUEVO PASO INTERMEDIO: Forzar la subida a Artifact Registry antes del deploy
+  # NUEVO PASO INTERMEDIO 2: Forzar la subida a Artifact Registry antes del deploy
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
