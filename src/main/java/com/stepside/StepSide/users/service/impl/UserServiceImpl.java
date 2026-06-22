@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.stream.Collectors;
 
 /**
  * Orquestador de lógica de negocio para usuarios y workflows de aprobación NoSQL.
@@ -54,94 +55,113 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    public List<CompanyUsersGroupDto> getUsersGroupedByCompany() {
+        return List.of();
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional // Garantiza que si algo falla, se aplique un rollback absoluto
     public void approveUser(String ttoId, UserApprovalRequestDTO request) {
-        // 1. ESCUDO DEFENSIVO: Si el payload de permisos viene vacío, aborta en el acto
+        // 1. ESCUDO DEFENSIVO: Validación perimetral temprana
         if (request.permissions() == null || request.permissions().isEmpty()) {
             throw new IllegalArgumentException("Validación fallida: Se requiere la asignación de al menos una aplicación para proceder.");
         }
 
-        // 2. CONSTRUCCIÓN DE LA CONSULTA: Localizar al usuario por ttoId o por _id primario
-        Query userQuery = new Query(
-                new Criteria().orOperator(
-                        Criteria.where("ttoId").is(ttoId),
-                        Criteria.where("_id").is(ObjectId.isValid(ttoId) ? new ObjectId(ttoId) : ttoId)
-                )
-        );
-
-        Document userDoc = mongoTemplate.findOne(userQuery, Document.class, "users");
-        if (userDoc == null) {
-            throw new NoSuchElementException("Usuario no encontrado en el clúster NoSQL con el identificador provisto: " + ttoId);
-        }
-        ObjectId userId = userDoc.getObjectId("_id");
-
-        // 3. RESOLUCIÓN DINÁMICA DE ESTADO: Localizar el _id de 'ACTIVE' en la tabla 'user_statuses'
+        // 2. RESOLUCIÓN DINÁMICA DE ESTADO PREVIA: Evita procesamiento si el catálogo está corrupto
         Query statusQuery = new Query(Criteria.where("name").is("ACTIVE"));
+        statusQuery.fields().include("_id"); // Proyección limpia: solo requerimos el ID
         Document statusDoc = mongoTemplate.findOne(statusQuery, Document.class, "user_statuses");
         if (statusDoc == null) {
             throw new IllegalStateException("Error de consistencia: No se localizó el estado 'ACTIVE' en la colección user_statuses.");
         }
         ObjectId activeStatusId = statusDoc.getObjectId("_id");
 
-        // 4. CONTROL DE INTEGRIDAD: Validar si la cuenta ya está aprobada
+        // 3. CONSTRUCCIÓN DE LA CONSULTA Y CONTROL DE INTEGRIDAD: Localizar usuario de forma segura
+        Query userQuery = new Query(
+                new Criteria().orOperator(
+                        Criteria.where("ttoId").is(ttoId),
+                        Criteria.where("_id").is(ObjectId.isValid(ttoId) ? new ObjectId(ttoId) : ttoId)
+                )
+        );
+        userQuery.fields().include("_id", "email", "status_id"); // Proyección eficiente de RAM
+
+        Document userDoc = mongoTemplate.findOne(userQuery, Document.class, "users");
+        if (userDoc == null) {
+            throw new NoSuchElementException("Usuario no encontrado en el clúster NoSQL con el identificador provisto: " + ttoId);
+        }
+
         if (activeStatusId.equals(userDoc.get("status_id"))) {
             throw new IllegalArgumentException("Operación inválida: La cuenta de usuario ya se encuentra aprobada y en estado ACTIVO.");
         }
+        ObjectId userId = userDoc.getObjectId("_id");
 
-        // 5. RESOLUCIÓN MASIVA DE APLICACIONES Y ROLES
+        // 4. RESOLUCIÓN MASIVA DE UN SOLO VIAJE (Eliminación total del problema N+1)
         Map<String, String> incomingPermissions = request.permissions();
 
+        // A) Traemos todas las aplicaciones del payload en un lote masivo
         Query appsQuery = new Query(Criteria.where("name").in(incomingPermissions.keySet()));
+        appsQuery.fields().include("_id", "name");
         List<Document> fetchedApps = mongoTemplate.find(appsQuery, Document.class, "applications");
 
-        List<Document> userApplicationsToInsert = new ArrayList<>();
+        // Mapeamos los IDs de las aplicaciones encontradas para armar la query masiva de roles
+        List<ObjectId> appIds = fetchedApps.stream().map(doc -> doc.getObjectId("_id")).collect(Collectors.toList());
+        List<String> roleNames = new ArrayList<>(incomingPermissions.values());
+
+        // B) OPTIMIZACIÓN SUPREMA: Traemos todos los roles coincidentes de un solo viaje usando $and y $in
+        Query rolesQuery = new Query(Criteria.where("app_id").in(appIds).and("name").in(roleNames));
+        rolesQuery.fields().include("_id", "app_id", "name");
+        List<Document> fetchedRoles = mongoTemplate.find(rolesQuery, Document.class, "roles");
+
+        // Indexamos los roles en un mapa de memoria O(1) usando una clave compuesta "appId_roleName"
+        Map<String, ObjectId> roleCacheMap = fetchedRoles.stream().collect(Collectors.toMap(
+                role -> role.getObjectId("app_id").toString() + "_" + role.getString("name"),
+                role -> role.getObjectId("_id"),
+                (existing, replacement) -> existing
+        ));
+
+        // 5. CONSTRUCCIÓN ASOCIATIVA EN MEMORIA
+        List<Document> userApplicationsToInsert = new ArrayList<>(fetchedApps.size());
+        Date currentDate = new Date();
 
         for (Document appDoc : fetchedApps) {
-            ObjectId appId = appDoc.getObjectId("_id");
+            String appIdStr = appDoc.getObjectId("_id").toString();
             String appName = appDoc.getString("name");
             String targetRoleName = incomingPermissions.get(appName);
 
-            // Con el ID de la aplicación y el nombre del rol, buscamos el Rol correspondiente
-            Query roleQuery = new Query(Criteria.where("app_id").is(appId).and("name").is(targetRoleName));
-            Document roleDoc = mongoTemplate.findOne(roleQuery, Document.class, "roles");
+            // Buscamos el rol de forma instantánea en la cache local sin golpear la base de datos
+            String cacheKey = appIdStr + "_" + targetRoleName;
 
-            if (roleDoc != null) {
-                ObjectId roleId = roleDoc.getObjectId("_id");
+            if (roleCacheMap.containsKey(cacheKey)) {
+                ObjectId roleId = roleCacheMap.get(cacheKey);
 
-                // Construimos el documento pivote respetando milimétricamente tu JSON de producción
                 Document userAppDoc = new Document()
                         .append("user_id", userId)
-                        .append("appId", appId.toString())
+                        .append("appId", appIdStr)
                         .append("role_id", roleId)
-                        .append("assignedAt", new Date())
+                        .append("assignedAt", currentDate)
                         .append("_class", "com.minorityreport.portal.auth.model.UserApplication");
 
                 userApplicationsToInsert.add(userAppDoc);
             } else {
-                log.warn("No se localizó el rol '{}' asignado para la aplicación '{}' en la base de datos.", targetRoleName, appName);
+                log.warn("Omisión defensiva: No existe la combinación del rol '{}' para la aplicación '{}' en los catálogos.", targetRoleName, appName);
             }
         }
 
-        // Si no se pudo resolver ninguna aplicación o rol válido, abortamos antes de romper la integridad
         if (userApplicationsToInsert.isEmpty()) {
-            throw new IllegalArgumentException("Validación fallida: Ninguna de las combinaciones de Aplicación y Rol provistas es válida en los catálogos.");
+            throw new IllegalArgumentException("Validación fallida: Ninguna de las combinaciones de Aplicación y Rol provistas es válida en el sistema.");
         }
 
-        // 6. PROTOCOLO DE PERSISTENCIA Y MUTACIÓN EN BOTELLA ATÓMICA
-        // A) Insertamos masivamente los permisos resueltos en user_applications
+        // 6. PERSISTENCIA ATÓMICA TRANSACCIONAL
         mongoTemplate.insert(userApplicationsToInsert, "user_applications");
 
-        // B) Transicionamos el estado de la cuenta del usuario a ACTIVE
         Update update = new Update();
         update.set("status_id", activeStatusId);
         update.set("status_name", "ACTIVE");
         update.set("failed_attempts", 0);
-        update.set("updated_at", new Date());
-
+        update.set("updated_at", currentDate);
         mongoTemplate.updateFirst(userQuery, update, "users");
 
-        // ============================================================================
-        // MOTOR DE NOTIFICACIONES ASÍNCRONAS - DESPACHO DE ALERTA DE ACTIVACIÓN
-        // ============================================================================
+        // 7. DESPACHO ASÍNCRONO DE ALERTA (Fuera del riesgo transaccional)
         String userEmail = userDoc.getString("email");
         Map<String, Object> templateVariables = new HashMap<>();
         templateVariables.put("mail_registered_user", userEmail);
@@ -152,12 +172,7 @@ public class UserServiceImpl implements UserService {
                 "ACCEPT_APPROVAL",
                 templateVariables
         );
-
         emailService.sendEmail(emailDto);
     }
 
-    @Override
-    public List<CompanyUsersGroupDto> getUsersGroupedByCompany() {
-        return List.of();
-    }
 }
