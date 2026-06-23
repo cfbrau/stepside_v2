@@ -40,7 +40,10 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/auth/signup",
                                 "/api/auth/login",
-                                "/api/auth/forgot-password/**"
+                                "/api/auth/forgot-password/**",
+                                "/swagger-ui/**",
+                                "/v3/api-docs/**",
+                                "/swagger-ui.html"
                         ).permitAll()
 
                         // Los endpoints de /api/users ya NO son públicos de libre acceso, requieren Token válido

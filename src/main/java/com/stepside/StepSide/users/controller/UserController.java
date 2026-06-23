@@ -4,6 +4,8 @@ import com.stepside.StepSide.users.dto.CompanyUsersGroupDto;
 import com.stepside.StepSide.users.dto.UserApprovalRequestDTO;
 import com.stepside.StepSide.users.dto.UserResponseDTO;
 import com.stepside.StepSide.users.service.UserService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -19,6 +21,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/users")
 @RequiredArgsConstructor
+@Tag(name = "Gobierno de Usuarios", description = "Endpoints privados para la hidratación, reportes jerárquicos y workflows de aprobación.")
 public class UserController {
 
     private final UserService userService;
@@ -51,6 +54,7 @@ public class UserController {
      * POST /api/users/{id}/approve
      */
     @PostMapping("/{id}/approve")
+    @Operation(summary = "Aprobar cuenta de usuario", description = "Ejecuta la mutación atómica del estado a ACTIVE, persiste masivamente las aplicaciones/roles asignados en la tabla pivote y gatilla la alerta asíncrona por correo.")
     public ResponseEntity<Void> approveUser(
             @PathVariable(name = "id") String userId,
             @Valid @RequestBody UserApprovalRequestDTO requestDto) {
