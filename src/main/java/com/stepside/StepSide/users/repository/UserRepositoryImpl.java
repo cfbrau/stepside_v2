@@ -102,15 +102,21 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
 
         if (!parentCompanyIds.isEmpty()) {
             Query companyQuery = new Query(Criteria.where("_id").in(parentCompanyIds));
-            companyQuery.fields().include("_id", "code", "description", "attributes.nombre", "attributes.razon_social");
+            companyQuery.fields().include("_id", "attributes.cuit", "code", "description", "attributes.nombre", "attributes.razon_social");
             List<Document> companiesRaw = mongoTemplate.find(companyQuery, Document.class, ttoCollection);
 
             for (Document doc : companiesRaw) {
                 String compIdStr = doc.get("_id").toString();
-                String compCuit = doc.getString("code") != null ? doc.getString("code") : "N/A";
+                String compCuit = "N/A";
+                Document attrs = (Document) doc.get("attributes");
+
+                if (attrs != null && attrs.getString("cuit") != null) {
+                    compCuit = attrs.getString("cuit"); // Caso 1: Vía attributes.cuit
+                } else if (doc.getString("code") != null) {
+                    compCuit = doc.getString("code");   // Caso 2: Fallback vía code de la raíz
+                }
                 companyCuitMap.put(compIdStr, compCuit);
 
-                Document attrs = (Document) doc.get("attributes");
                 String compName = "EMPRESA_SIN_NOMBRE";
                 if (attrs != null && attrs.getString("nombre") != null) compName = attrs.getString("nombre");
                 else if (attrs != null && attrs.getString("razon_social") != null) compName = attrs.getString("razon_social");
