@@ -92,6 +92,9 @@ public class EmailServiceImpl implements EmailService {
         } catch (Exception e) {
             log.error("Falla crítica en el procesamiento del motor de notificaciones para {}: {}",
                     messageDto.templateName(), e.getMessage());
+
+            throw new RuntimeException("Error en el despacho de correo para la plantilla: " + messageDto.templateName(), e);
         }
+
     }
 }

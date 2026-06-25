@@ -7,8 +7,6 @@ steps:
       - '--builder=gcr.io/buildpacks/builder:latest'
       - '--env=GOOGLE_RUNTIME_VERSION=21'
       - '--env=MAVEN_OPTS=-Dmaven.test.skip=true'
-      # ESTA LÍNEA ES LA SOLUCIÓN: Fuerza a Buildpacks a incluir los certificados de confianza de Linux
-      - '--env=BP_ENABLE_RUNTIME_CERT_INJECTION=true'
 
   # Paso 2: Subir la imagen a la nube
   - name: 'gcr.io/cloud-builders/docker'
