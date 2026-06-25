@@ -2,58 +2,80 @@ package com.stepside.StepSide.auth.service.impl;
 
 import com.stepside.StepSide.auth.dto.CreateUserRequest;
 import com.stepside.StepSide.auth.dto.CreateUserResponse;
-import com.stepside.StepSide.auth.service.AuthService;
-import com.stepside.StepSide.common.security.JwtProvider;
-import com.stepside.StepSide.notification.dto.EmailMessageDto;
-import com.stepside.StepSide.notification.service.EmailService;
-import com.stepside.StepSide.ttos.model.Tto;
-import com.stepside.StepSide.ttos.repository.TtoRepository;
 import com.stepside.StepSide.users.dto.AuthResponseDTO;
 import com.stepside.StepSide.users.dto.LoginRequestDTO;
+import com.stepside.StepSide.notification.dto.EmailMessageDto;
 import com.stepside.StepSide.users.model.User;
+import com.stepside.StepSide.ttos.model.Tto;
 import com.stepside.StepSide.users.repository.UserRepository;
+import com.stepside.StepSide.ttos.repository.TtoRepository;
+import com.stepside.StepSide.notification.service.EmailService;
+import com.stepside.StepSide.auth.service.AuthService;
+import com.stepside.StepSide.common.security.JwtProvider;
+
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.bson.Document;
+import org.bson.types.ObjectId;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.*;
 
-/**
- * Implementación de alta gama para el control de accesos y Onboarding en MongoDB Atlas.
- * Saneada bajo estrictas normas de consistencia bidireccional de grafos y diseño polimórfico.
- */
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AuthServiceImpl implements AuthService {
 
     private final UserRepository userRepository;
     private final TtoRepository ttoRepository;
-    private final EmailService emailService;
     private final PasswordEncoder passwordEncoder;
+    private final EmailService emailService;
+    private final MongoTemplate mongoTemplate;
     private final JwtProvider jwtProvider;
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public CreateUserResponse signUp(CreateUserRequest request) {
 
-        // 1. ESCUDO DEFENSIVO: Validar unicidad del E-mail (Case Insensitive en memoria)
-        String emailNormalizado = request.account().email().trim().toLowerCase();
+        // 1. ESCUDO DEFENSIVO: Validar unicidad del E-mail
+        String emailNormalizado = request.email().trim().toLowerCase();
         if (userRepository.findByEmail(emailNormalizado).isPresent()) {
             throw new org.springframework.dao.DuplicateKeyException(
-                    "Error de Registro: El correo electrónico '" + request.account().email() + "' ya se encuentra registrado en la plataforma.");
+                    "Error de Registro: El correo electrónico '" + request.email() + "' ya se encuentra registrado en la plataforma.");
         }
 
         Date timestampNow = new Date();
-        String currentTimestampStr = Instant.now().toString();
+        String currentTimestampStr = java.time.Instant.now().toString();
+
+        // 2. RESOLUCIÓN DINÁMICA DE ESTADO: Buscamos el _id del estado 'PENDING' en 'user_statuses'
+        Query statusQuery = new Query(Criteria.where("name").is("PENDING"));
+        statusQuery.fields().include("_id");
+        Document statusDoc = mongoTemplate.findOne(statusQuery, Document.class, "user_statuses");
+        ObjectId pendingStatusId = statusDoc != null ? statusDoc.getObjectId("_id") : null;
+
+        // 3. RESOLUCIÓN DINÁMICA DEL TIPO DE RELACIÓN: Buscamos el _id de 'WORK_FOR' en 'relation_types'
+        Query relTypeQuery = new Query(Criteria.where("name").is("WORK_FOR"));
+        relTypeQuery.fields().include("_id");
+        Document relTypeDoc = mongoTemplate.findOne(relTypeQuery, Document.class, "relation_types");
+        String relationTypeIdStr = relTypeDoc != null ? relTypeDoc.get("_id").toString() : "6a305b8d5cffbbf10841644f";
 
         // ============================================================================
-        // PASO I: CONFIGURAR / PERSISTIR EMPRESA REUTILIZABLE (NoSQL Polimórfico)
+        // PASO I: CONFIGURAR / PERSISTIR EMPRESA (Garantiza nombres de campos minúsculos)
         // ============================================================================
-        String taxId = request.company().attributes().get("cuit") != null
-                ? request.company().attributes().get("cuit").toString().trim().toUpperCase()
-                : "COMP-" + UUID.randomUUID().toString().substring(0, 8);
+        String taxId = request.companyCuit() != null && !request.companyCuit().trim().isEmpty()
+                ? request.companyCuit().trim().toUpperCase()
+                : "COMP-" + java.util.UUID.randomUUID().toString().substring(0, 8);
 
-        Optional<Tto> existingCompany = ttoRepository.findByCode(taxId);
+        java.util.Optional<Tto> existingCompany = ttoRepository.findByCode(taxId);
         Tto savedCompany;
 
         if (existingCompany.isPresent()) {
@@ -61,10 +83,16 @@ public class AuthServiceImpl implements AuthService {
         } else {
             Tto companyTto = new Tto();
             companyTto.setCode(taxId);
-            companyTto.setTtoName(request.company().attributes().getOrDefault("razon_social", "Empresa Registrada").toString());
+            companyTto.setTtoName(request.companyRazonSocial().trim());
             companyTto.setTtoTypeName("COMPANY");
             companyTto.setTtoStatusName("PENDING");
-            companyTto.setAttributes(request.company().attributes());
+
+            Map<String, Object> companyAttributes = new HashMap<>();
+            companyAttributes.put("cuit", taxId);
+            companyAttributes.put("nombre", request.companyNombreFantasia().trim());
+            companyAttributes.put("razon_social", request.companyRazonSocial().trim());
+            companyTto.setAttributes(companyAttributes);
+
             companyTto.setCreatedAt(timestampNow);
             companyTto.setUpdatedAt(timestampNow);
 
@@ -72,28 +100,31 @@ public class AuthServiceImpl implements AuthService {
         }
 
         // ============================================================================
-        // PASO II: PERSISTIR PERSONA CON GRAFO RELACIONAL EMBEBIDO
+        // PASO II: PERSISTIR PERSONA CON GRAFO RELACIONAL SINCRO (parent_id y relation_type_id)
         // ============================================================================
         Tto personTto = new Tto();
-        String dni = request.person().attributes().get("dni") != null
-                ? request.person().attributes().get("dni").toString().trim()
-                : "PERS-" + UUID.randomUUID().toString().substring(0, 8);
+        personTto.setCode(emailNormalizado);
 
-        personTto.setCode(dni.toUpperCase());
-        String resolvedName = request.person().attributes().getOrDefault("nombre", "Usuario").toString() + " " +
-                request.person().attributes().getOrDefault("apellido", "StepSide").toString();
-        personTto.setTtoName(resolvedName.trim());
+        String resolvedName = request.firstName().trim() + " " + request.lastName().trim();
+        personTto.setTtoName(resolvedName);
         personTto.setTtoTypeName("PERSON");
         personTto.setTtoStatusName("PENDING");
-        personTto.setAttributes(request.person().attributes());
+
+        Map<String, Object> personAttributes = new HashMap<>();
+        personAttributes.put("nombre", request.firstName().trim());
+        personAttributes.put("apellido", request.lastName().trim());
+        personAttributes.put("email", emailNormalizado);
+        personTto.setAttributes(personAttributes);
+
         personTto.setCreatedAt(timestampNow);
         personTto.setUpdatedAt(timestampNow);
 
-        // Diseñamos el engrane relacional NoSQL nativo: Persona -> Pertenece a -> Empresa
         List<Map<String, Object>> personRelations = new ArrayList<>();
         Map<String, Object> toCompanyNode = new HashMap<>();
-        toCompanyNode.put("relation_type_name", "BELONG_TO");
-        toCompanyNode.put("related_id", savedCompany.getId());
+        toCompanyNode.put("relation_type_id", relationTypeIdStr);
+        toCompanyNode.put("relation_type_name", "WORK_FOR");
+        toCompanyNode.put("parent_id", savedCompany.getId());
+        toCompanyNode.put("related_id", personTto.getCode());
         toCompanyNode.put("start_date", currentTimestampStr);
         toCompanyNode.put("end_date", null);
         personRelations.add(toCompanyNode);
@@ -102,12 +133,13 @@ public class AuthServiceImpl implements AuthService {
         Tto savedPerson = ttoRepository.save(personTto);
 
         // ============================================================================
-        // CORREGIDO: ESPEJADO MUTUO EN CALIENTE (Empresa -> Posee Empleado -> Persona)
-        // Evita dejar el documento de la compañía huérfano de referencias en el cluster cloud
+        // PASO III: MUTACIÓN INVERSA SOBRE LA COMPAÑÍA (Espejado en caliente)
         // ============================================================================
         Map<String, Object> toPersonNode = new HashMap<>();
-        toPersonNode.put("relation_type_name", "HAS_EMPLOYEE"); // Relación semántica inversa
-        toPersonNode.put("related_id", savedPerson.getId()); // Inyectamos el ID de la persona guardada
+        toPersonNode.put("relation_type_id", relationTypeIdStr);
+        toPersonNode.put("relation_type_name", "HAS_EMPLOYEE");
+        toPersonNode.put("parent_id", savedCompany.getId());
+        toPersonNode.put("related_id", savedPerson.getId());
         toPersonNode.put("start_date", currentTimestampStr);
         toPersonNode.put("end_date", null);
 
@@ -116,26 +148,27 @@ public class AuthServiceImpl implements AuthService {
         }
         savedCompany.getRelations().add(toPersonNode);
         savedCompany.setUpdatedAt(timestampNow);
-
-        // Sincronizamos la mutación del grafo inverso directamente en Atlas
         ttoRepository.save(savedCompany);
 
         // ============================================================================
-        // PASO III: PERSISTIR CUENTA DE USUARIO CON AUDITORÍA FÍSICA NATIVA
+        // PASO IV: PERSISTIR CUENTA DE USUARIO CON ENLACE DE CATÁLOGOS LÓGICOS
         // ============================================================================
         User user = new User();
         user.setEmail(emailNormalizado);
-        user.setPassword(passwordEncoder.encode(request.account().password()));
+        user.setPassword(passwordEncoder.encode(request.password()));
+
+        user.setStatusId(pendingStatusId);
         user.setStatusName("PENDING");
+
         user.setTtoId(savedPerson.getId());
-        user.setExpiration(Date.from(Instant.now().plus(365, ChronoUnit.DAYS)));
+        user.setExpiration(Date.from(java.time.Instant.now().plus(365, java.time.temporal.ChronoUnit.DAYS)));
         user.setCreatedAt(timestampNow);
         user.setUpdatedAt(timestampNow);
 
         User savedUser = userRepository.save(user);
 
         // ============================================================================
-        // PASO IV: NOTIFICACIÓN ASÍNCRONA - ALERTA DE APROBACIÓN PENDIENTE
+        // PASO V: MOTOR DE NOTIFICACIONES ASÍNCRONAS
         // ============================================================================
         Map<String, Object> templateVariables = new HashMap<>();
         templateVariables.put("mail_registered_user", savedUser.getEmail());
@@ -146,32 +179,33 @@ public class AuthServiceImpl implements AuthService {
                 "NEED_APPROVAL",
                 templateVariables
         );
-
         emailService.sendEmail(alertDto);
 
-        return new CreateUserResponse(savedUser.getId(), savedUser.getEmail(), savedPerson.getId(), savedCompany.getId());
+        return new CreateUserResponse(
+                savedUser.getId(),
+                savedUser.getEmail(),
+                savedPerson.getId(),
+                savedCompany.getId(),
+                "La cuenta de ecosistema ha sido registrada de forma atómica y se encuentra en espera de aprobación administrativa."
+        );
     }
 
     @Override
     public AuthResponseDTO login(LoginRequestDTO request) {
-        // 1. Buscar al usuario de forma inquebrantable por su email único
-        User user = userRepository.findByEmail(request.email())
+        User user = userRepository.findByEmail(request.email().trim().toLowerCase())
                 .orElseThrow(() -> new NoSuchElementException("Credenciales inválidas: El email no se encuentra registrado."));
 
-        // 2. Control de Integridad: Verificar si la cuenta no está bloqueada o inactiva
         if (user.getStatusName() != null && "LOCKED".equalsIgnoreCase(user.getStatusName())) {
             throw new IllegalStateException("Acceso denegado: La cuenta de usuario se encuentra bloqueada.");
         }
 
-        // 3. Validación de contraseñas: Contrastamos el texto plano contra el hash BCrypt
         if (!passwordEncoder.matches(request.password(), user.getPassword())) {
             throw new IllegalArgumentException("Credenciales inválidas: La contraseña provista es incorrecta.");
         }
 
-        // 4. Criptografía: Emitimos el token JWT firmado de 8 horas utilizando el email del usuario
         String token = jwtProvider.generateToken(user.getEmail());
 
-        // Retornamos el DTO de salida estándar
         return new AuthResponseDTO(token, "Bearer", user.getEmail());
     }
+
 }

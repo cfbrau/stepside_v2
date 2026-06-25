@@ -1,5 +1,5 @@
 steps:
-  # Paso 1: Compilar la imagen de Java 21 usando Buildpacks (YA FUNCIONA)
+  # Paso 1: Compilar la imagen inyectando la instalación de certificados CA
   - name: 'gcr.io/k8s-skaffold/pack'
     args:
       - 'build'
@@ -7,14 +7,16 @@ steps:
       - '--builder=gcr.io/buildpacks/builder:latest'
       - '--env=GOOGLE_RUNTIME_VERSION=21'
       - '--env=MAVEN_OPTS=-Dmaven.test.skip=true'
+      # ESTA LÍNEA ES LA SOLUCIÓN: Fuerza a Buildpacks a incluir los certificados de confianza de Linux
+      - '--env=BP_ENABLE_RUNTIME_CERT_INJECTION=true'
 
-  # NUEVO PASO INTERMEDIO 2: Forzar la subida a Artifact Registry antes del deploy
+  # Paso 2: Subir la imagen a la nube
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
       - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
 
-  # Paso 3: Desplegar en Cloud Run (Ahora sí la imagen ya va a estar en la nube)
+  # Paso 3: Desplegar en Cloud Run
   - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'gcloud'
     args:
@@ -27,6 +29,5 @@ steps:
 options:
   logging: CLOUD_LOGGING_ONLY
 
-# Podés dejar esto también como buena práctica para el registro de Cloud Build
 images:
   - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'

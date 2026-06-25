@@ -1,12 +1,13 @@
-package com.stepside.StepSide.auth.dto; // <-- SANEADO: Tu nueva ruta oficial NoSQL
+package com.stepside.StepSide.auth.dto;
 
 /**
- * Contrato de salida (Response) inmutable que certifica el Onboarding exitoso.
- * Retorna los identificadores alfanuméricos Strings nativos de MongoDB Atlas.
+ * DTO de salida unificado que confirma la creación atómica de la cuenta,
+ * inyectando los identificadores de persistencia NoSQL generados.
  */
 public record CreateUserResponse(
         String userId,
         String email,
         String personTtoId,
-        String companyTtoId
+        String companyTtoId,
+        String message
 ) {}

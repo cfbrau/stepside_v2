@@ -65,8 +65,12 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOriginPatterns(List.of(
                 "https://stepside-backend-v2-921706262238.southamerica-east1.run.app",
-                "http://127.0.0.1:5500",
-                "http://localhost:[*]"
+                "http://localhost:5500",   // Puerto clásico de Live Server (VS Code)
+                "http://127.0.0.1:5500",   // Loopback clásico de Live Server
+                "http://localhost:3000",   // Puerto clásico de React / Next.js
+                "http://localhost:8080",
+                "http://127.0.0.1:8080",
+                "http://localhost:5173"    // Puerto clásico de Vite (React/Vue moderno)
         ));
 
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
