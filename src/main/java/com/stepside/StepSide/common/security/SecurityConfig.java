@@ -15,11 +15,6 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.List;
 
-/**
- * El Único Candado Perimetral de StepSide.
- * Gobierna de forma centralizada las reglas de acceso BSON, CORS y filtros stateless.
- * Saneado por el Arquitecto para acoplar el ruteo seguro por tokens JWT.
- */
 @Configuration
 @EnableWebSecurity
 @RequiredArgsConstructor
@@ -30,13 +25,29 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // SANEAMIENTO MANDATORIO: Desactivamos CSRF ya que la autenticación viaja encapsulada en la cabecera Bearer
                 .csrf(csrf -> csrf.disable())
-
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                // MEJORA PRODUCTION: Captura fallas de tokens en canales de streaming en el microsegundo cero.
+                // Responde un error SSE limpio y libera el hilo de Tomcat sin romper sockets.
+                .exceptionHandling(exception -> exception
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            String acceptHeader = request.getHeader("Accept");
+                            if (acceptHeader != null && acceptHeader.contains("text/event-stream")) {
+                                response.setStatus(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED);
+                                response.setContentType("text/event-stream");
+                                response.setCharacterEncoding("UTF-8");
+                                response.getWriter().write("event: ERROR\ndata: {\"status\":\"UNAUTHORIZED\",\"reason\":\"Token expirado o inválido\"}\n\n");
+                                response.getWriter().flush();
+                            } else {
+                                response.sendError(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED, authException.getMessage());
+                            }
+                        })
+                )
+
                 .authorizeHttpRequests(auth -> auth
-                        // Compuertas públicas del ecosistema unificado
+                        // 1. COMPUERTAS PÚBLICAS LIMITADAS A ONBOARDING Y LOGIN (Cerrado hermético)
                         .requestMatchers(
                                 "/api/auth/signup",
                                 "/api/auth/login",
@@ -46,20 +57,18 @@ public class SecurityConfig {
                                 "/swagger-ui.html"
                         ).permitAll()
 
-                        // Los endpoints de /api/users ya NO son públicos de libre acceso, requieren Token válido
+                        // 2. COMPUERTAS AUTENTICADAS: El streaming exige estrictamente token firmado
                         .requestMatchers("/api/users/**").authenticated()
 
+                        // 3. CIERRE PERIMETRAL GENERAL
                         .anyRequest().authenticated()
                 )
-                // Inyectamos nuestro JwtFilter justo antes del filtro de autenticación por defecto de Spring
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
-    /**
-     * Puente global de red para tu Frontend de Live Server y entornos Cloud.
-     */
+
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
@@ -85,5 +94,11 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer webSecurityCustomizer() {
+        // Indica al núcleo que esta subruta de infraestructura no pertenece al dominio perimetral
+        return (web) -> web.ignoring().requestMatchers("/error");
     }
 }

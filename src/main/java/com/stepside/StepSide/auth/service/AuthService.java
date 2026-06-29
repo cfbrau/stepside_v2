@@ -2,7 +2,7 @@ package com.stepside.StepSide.auth.service;
 
 import com.stepside.StepSide.auth.dto.CreateUserRequest;
 import com.stepside.StepSide.auth.dto.CreateUserResponse;
-import com.stepside.StepSide.users.dto.AuthResponseDTO;
+import com.stepside.StepSide.auth.dto.AuthResponseDTO;
 import com.stepside.StepSide.users.dto.LoginRequestDTO;
 //import com.stepside.StepSide.auth.dto.LoginRequest;
 //import com.stepside.StepSide.auth.dto.LoginResponse;

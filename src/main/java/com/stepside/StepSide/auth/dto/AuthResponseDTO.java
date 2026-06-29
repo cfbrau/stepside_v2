@@ -1,4 +1,4 @@
-package com.stepside.StepSide.users.dto;
+package com.stepside.StepSide.auth.dto;
 
 /**
  * DTO de salida perimetral que transporta el Token JWT hacia el cliente.

@@ -2,7 +2,7 @@ package com.stepside.StepSide.auth.service.impl;
 
 import com.stepside.StepSide.auth.dto.CreateUserRequest;
 import com.stepside.StepSide.auth.dto.CreateUserResponse;
-import com.stepside.StepSide.users.dto.AuthResponseDTO;
+import com.stepside.StepSide.auth.dto.AuthResponseDTO;
 import com.stepside.StepSide.users.dto.LoginRequestDTO;
 import com.stepside.StepSide.notification.dto.EmailMessageDto;
 import com.stepside.StepSide.users.model.User;
@@ -41,6 +41,10 @@ public class AuthServiceImpl implements AuthService {
     private final EmailService emailService;
     private final MongoTemplate mongoTemplate;
     private final JwtProvider jwtProvider;
+
+    // CONSTANTE DE INFRAESTRUCTURA: ID único de tu aplicación Backoffice mapeado en Atlas Cloud
+    @org.springframework.beans.factory.annotation.Value("${stepside.security.application-id}")
+    private String stepSideAppId;
 
     @Override
     @org.springframework.transaction.annotation.Transactional
@@ -192,18 +196,72 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public AuthResponseDTO login(LoginRequestDTO request) {
+        // 1. Verificación de Existencia de Cuenta
         User user = userRepository.findByEmail(request.email().trim().toLowerCase())
                 .orElseThrow(() -> new NoSuchElementException("Credenciales inválidas: El email no se encuentra registrado."));
 
+        // 2. Control de Candado Activo
         if (user.getStatusName() != null && "LOCKED".equalsIgnoreCase(user.getStatusName())) {
             throw new IllegalStateException("Acceso denegado: La cuenta de usuario se encuentra bloqueada.");
         }
 
+        // 3. Verificación de Contraseña Criptográfica
         if (!passwordEncoder.matches(request.password(), user.getPassword())) {
             throw new IllegalArgumentException("Credenciales inválidas: La contraseña provista es incorrecta.");
         }
 
-        String token = jwtProvider.generateToken(user.getEmail());
+        System.out.println("Datos de usuario");
+
+        // ============================================================================
+        // 🚀 PASO II: CRUCE DE ACCESOS MULTITENANT (Colección Física user_applications)
+        // SANEADO: Apuntamos estrictamente al nombre real de tu tabla 'user_applications'
+        // ============================================================================
+        org.bson.types.ObjectId userObjectId = new org.bson.types.ObjectId(user.getId().toString());
+
+        // Construimos el documento BSON con las llaves exactas de tu captura de Compass
+        org.bson.Document filtroBson = new org.bson.Document()
+                .append("user_id", userObjectId)
+                .append("appId", this.stepSideAppId.trim()); // Mantiene la "I" mayúscula del BSON
+
+        // Forzamos al driver a buscar strictly en la colección real de tu base
+        org.bson.Document userAppDoc = mongoTemplate.getDb()
+                .getCollection("user_applications") // <-- CORREGIDO: Nombre real y exacto en Atlas
+                .find(filtroBson)
+                .first();
+
+        // ESCUDO DEFENSIVO OWASP: Si no posee asignación activa para este appId, se expulsa
+        if (userAppDoc == null) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Acceso denegado: El usuario no posee privilegios asignados para el appId '" + this.stepSideAppId.trim() + "' en esta aplicación."
+            );
+        }
+
+        // Recuperamos el role_id del documento BSON mapeando de forma segura
+        String roleIdStr = userAppDoc.get("role_id") != null ? userAppDoc.get("role_id").toString() : null;
+        if (roleIdStr == null || roleIdStr.isBlank()) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Acceso denegado: Estructura de privilegios corrompida en el ecosistema."
+            );
+        }
+
+        // ============================================================================
+        // 🚀 PASO III: RESOLUCIÓN DEL NOMBRE DEL ROL PURO (roles)
+        // ============================================================================
+        org.bson.types.ObjectId roleObjectId = new org.bson.types.ObjectId(roleIdStr);
+        Query queryRol = new Query(Criteria.where("_id").is(roleObjectId));
+        Document roleDoc = mongoTemplate.findOne(queryRol, Document.class, "roles");
+
+        if (roleDoc == null) {
+            throw new NoSuchElementException("Error de consistencia: El rol asignado no existe en la base de datos cloud.");
+        }
+
+        String pureRoleName = roleDoc.getString("name");
+        if (pureRoleName == null || pureRoleName.isBlank()) {
+            throw new IllegalStateException("Error de consistencia: El rol mapeado no posee un identificador semántico válido.");
+        }
+
+        // 4. CANAL I: Generamos el token inyectándole estrictamente el rol puro ("ADMIN")
+        String token = jwtProvider.generateToken(user.getEmail(), pureRoleName.trim());
 
         return new AuthResponseDTO(token, "Bearer", user.getEmail());
     }
