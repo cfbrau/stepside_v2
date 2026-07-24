@@ -23,7 +23,8 @@ steps:
       - 'stepside-backend-v2'
       - '--image=southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
       - '--region=southamerica-east1'
-      - '--set-secrets=STEPSIDE_ARCA_CERTIFICADO_STRING=arca-certificado:latest,STEPSIDE_ARCA_CLAVE_STRING=arca-clave-privada:latest'
+      - '--set-secrets=STEPSIDE_ARCA_CERTIFICADO_STRING=arca-certificado:latest'
+      - '--set-secrets=STEPSIDE_ARCA_CLAVE_STRING=arca-clave-privada:latest'
 
 options:
   logging: CLOUD_LOGGING_ONLY
