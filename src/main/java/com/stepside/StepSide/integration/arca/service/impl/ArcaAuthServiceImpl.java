@@ -20,6 +20,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
+import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.PrivateKey;
@@ -39,12 +40,17 @@ public class ArcaAuthServiceImpl {
 
     private final ArcaSoapClient arcaSoapClient;
 
-    // USADA TU PROPIEDAD EXACTA DE ACCESO POST AL WSAA
     @Value("${stepside.arca.service-url-logprodd}")
     private String wsaaUrlProduccion;
 
     @Value("${stepside.arca.cuit-representada}")
     private String cuitRepresentada;
+
+    @Value("${stepside.arca.certificado-string:}")
+    private String certificadoString;
+
+    @Value("${stepside.arca.clave-string:}")
+    private String claveString;
 
     @Value("classpath:arca/consulta_cuit.crt")
     private Resource certResource;
@@ -59,7 +65,7 @@ public class ArcaAuthServiceImpl {
     }
 
     public String obtenerTicketAccesoProduccion() {
-        //log.info("[ARCA PRODUCCIÓN] Solicitando Ticket de Acceso al WSAA real: {}", wsaaUrlProduccion);
+        log.info("[ARCA PRODUCCIÓN] Solicitando Ticket de Acceso al WSAA real: {}", wsaaUrlProduccion);
         try {
             String xmlLoginTicket = buildLoginTicketXml();
             CMSSignedData signedData = generateCmsSignedData(xmlLoginTicket);
@@ -75,7 +81,7 @@ public class ArcaAuthServiceImpl {
                             "   </soapenv:Body>\n" +
                             "</soapenv:Envelope>";
 
-
+            // Usamos tu cliente SOAP con el parámetro de acción vacío estándar que te funcionaba
             return arcaSoapClient.sendSoapRequest(this.wsaaUrlProduccion, "", wsaaSoapEnvelope);
 
         } catch (Exception e) {
@@ -85,7 +91,8 @@ public class ArcaAuthServiceImpl {
     }
 
     public String consultarPersonaRealA13(String tokenRealARCA, String signRealARCA, String cuitObjetivo) {
-        // CORREGIDO: Clavados los dos namespaces idénticos a los de SoapUI
+        // CORREGIDO: El namespace se ata ÚNICAMENTE al tag getPersona con el prefijo a13.
+        // Los elementos hijos (token, sign, etc.) quedan con namespace vacío como exige ARCA.
         return "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:a13=\"http://a13.soap.ws.server.puc.sr/\">\n" +
                 "   <soapenv:Header/>\n" +
                 "   <soapenv:Body>\n" +
@@ -121,26 +128,45 @@ public class ArcaAuthServiceImpl {
 
     private CMSSignedData generateCmsSignedData(String payload) throws Exception {
         X509Certificate certificate;
-        try (InputStream certIn = certResource.getInputStream()) {
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            certificate = (X509Certificate) cf.generateCertificate(certIn);
+
+        // EVALUACIÓN MINUCIOSA: Si el String está vacío, procesa el archivo físico del classpath
+        if (certificadoString == null || certificadoString.isBlank()) {
+            try (InputStream certIn = certResource.getInputStream()) {
+                CertificateFactory cf = CertificateFactory.getInstance("X.509");
+                certificate = (X509Certificate) cf.generateCertificate(certIn);
+            }
+        } else {
+            // SI ES UN STRING PLANO EN UNA LÍNEA (Base64 puro): Lo decodificamos directo a binario
+            byte[] certBytes = Base64.decode(certificadoString.trim().replaceAll("\\s+", ""));
+            try (InputStream certIn = new ByteArrayInputStream(certBytes)) {
+                CertificateFactory cf = CertificateFactory.getInstance("X.509");
+                certificate = (X509Certificate) cf.generateCertificate(certIn);
+            }
         }
 
         PrivateKey privateKey;
-        try (InputStream keyIn = keyResource.getInputStream()) {
-            byte[] keyBytes = keyIn.readAllBytes();
-            String pem = new String(keyBytes, StandardCharsets.UTF_8)
-                    .replaceAll("-----BEGIN PRIVATE KEY-----", "")
-                    .replaceAll("-----END PRIVATE KEY-----", "")
-                    .replaceAll("-----BEGIN RSA PRIVATE KEY-----", "")
-                    .replaceAll("-----END RSA PRIVATE KEY-----", "")
-                    .replaceAll("\\s+", "");
+        byte[] decodedKey;
 
-            byte[] decodedKey = Base64.decode(pem);
-            PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decodedKey);
-            KeyFactory kf = KeyFactory.getInstance("RSA");
-            privateKey = kf.generatePrivate(keySpec);
+        if (claveString == null || claveString.isBlank()) {
+            try (InputStream keyIn = keyResource.getInputStream()) {
+                byte[] keyBytes = keyIn.readAllBytes();
+                String pem = new String(keyBytes, StandardCharsets.UTF_8)
+                        .replaceAll("-----BEGIN PRIVATE KEY-----", "")
+                        .replaceAll("-----END PRIVATE KEY-----", "")
+                        .replaceAll("-----BEGIN RSA PRIVATE KEY-----", "")
+                        .replaceAll("-----END RSA PRIVATE KEY-----", "")
+                        .replaceAll("\\s+", "");
+                decodedKey = Base64.decode(pem);
+            }
+        } else {
+            // SI ES TU VARIABLE DE PROPIEDADES EN UNA LÍNEA: Ya es un Base64 puros sin cabeceras PEM. Solo barremos espacios.
+            String limpiaClave = claveString.trim().replaceAll("\\s+", "");
+            decodedKey = Base64.decode(limpiaClave);
         }
+
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decodedKey);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        privateKey = kf.generatePrivate(keySpec);
 
         CMSSignedDataGenerator signedDataGenerator = new CMSSignedDataGenerator();
         ContentSigner sha256Signer = new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(privateKey);
