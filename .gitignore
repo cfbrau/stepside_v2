@@ -34,3 +34,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### ARCA ###
+src/main/resources/arca/consulta_cuit.crt
+src/main/resources/arca/mi_clave.key

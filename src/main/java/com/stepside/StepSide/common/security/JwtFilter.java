@@ -5,104 +5,92 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.access.AccessDeniedException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
+
 import java.io.IOException;
+import java.util.List;
 
 /**
  * FILTRO PERIMETRAL DE INSPECCIÓN DE DATOS: Ecosistema StepSide.
- * Corregido por Fabián aplicando telemetría forense para auditar las llaves internas del JWT.
+ * Optimizado bajo estándares de producción, mitigación de hilos bloqueantes y seguridad OWASP.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtFilter extends OncePerRequestFilter {
 
+    private static final String BEARER_PREFIX = "Bearer ";
+    private static final String TOKEN_PARAM = "token";
+
     private final JwtProvider jwtProvider;
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
-            throws ServletException, IOException {
+    protected void doFilterInternal(
+            @NonNull HttpServletRequest request,
+            @NonNull HttpServletResponse response,
+            @NonNull FilterChain filterChain) throws ServletException, IOException {
 
-        String token = null;
-        String authHeader = request.getHeader("Authorization");
+        try {
+            String token = extractToken(request);
 
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-        } else if (request.getParameter("token") != null) {
-            token = request.getParameter("token");
-        }
-
-        if (token != null && jwtProvider.validateToken(token)) {
-            String email = jwtProvider.getEmailFromToken(token);
-
-            if (SecurityContextHolder.getContext().getAuthentication() == null) {
-
-                String rolReal = null;
-                try {
-                    // 1. Aislamiento del Payload (Parte central del JWT)
-                    String[] partes = token.split("\\.");
-                    if (partes.length >= 2) {
-                        String base64Payload = partes[1]; // Muerde strictly el cuerpo central del token
-
-                        // Ajuste elástico de padding Base64
-                        int paddingFaltante = 4 - (base64Payload.length() % 4);
-                        if (paddingFaltante < 4) {
-                            for (int i = 0; i < paddingFaltante; i++) base64Payload += "=";
-                        }
-
-                        // 2. Decodificación limpia a texto plano UTF-8
-                        String jsonCrudoConvertido = new String(
-                                java.util.Base64.getUrlDecoder().decode(base64Payload),
-                                java.nio.charset.StandardCharsets.UTF_8
-                        );
-
-                        // ============================================================================
-                        // 🛰️ TELEMETRÍA FORENSE DE RED: Imprime el JSON real que viaja por el cable
-                        // ============================================================================
-                        System.out.println("====================================================================");
-                        System.out.println("[AUDITORÍA JWT] Contenido crudo del Payload que llegó al servidor:");
-                        System.out.println(jsonCrudoConvertido);
-                        System.out.println("====================================================================");
-
-                        // SANEADO: Usamos estrictamente la variable correcta mapeada en el bloque superior
-                        if (jsonCrudoConvertido.contains("\"roles\":")) {
-                            int inicio = jsonCrudoConvertido.indexOf("\"roles\":\"") + 9;
-                            int fin = jsonCrudoConvertido.indexOf("\"", inicio);
-                            rolReal = jsonCrudoConvertido.substring(inicio, fin).trim();
-                        } else if (jsonCrudoConvertido.contains("\"authorities\":")) {
-                            System.out.println("[AUDITORÍA] Estructura alternativa detectada: authorities");
-                        }
-                    }
-                } catch (Exception e) {
-                    System.out.println("[AUDITORÍA ERROR] Falló la decodificación interna: " + e.getMessage());
-                    rolReal = null;
-                }
-
-                // Escudo de expulsión defensiva OWASP
-                if (rolReal == null || rolReal.isBlank()) {
-                    throw new AccessDeniedException(
-                            "Falla perimetral: El pasaporte criptográfico no declara una jerarquía de acceso válida."
-                    );
-                }
-
-                String formattedAuthority = "ROLE_" + rolReal.trim().toUpperCase();
-                org.springframework.security.core.authority.SimpleGrantedAuthority authority =
-                        new org.springframework.security.core.authority.SimpleGrantedAuthority(formattedAuthority);
-
-                // Instanciamos el token cargando su jerarquía real normalizada en la CPU
-                UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                        email, null, java.util.List.of(authority)
-                );
-
-                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(authentication);
+            if (StringUtils.hasText(token) && jwtProvider.validateToken(token)) {
+                setupAuthentication(token, request);
             }
+        } catch (Exception e) {
+            // Registro forense asíncrono no bloqueante omitiendo fugas de información al cliente
+            log.error("Fallo crítico en el perímetro de autenticación JWT: {}", e.getMessage());
+            SecurityContextHolder.clearContext();
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * Extrae el token desde los encabezados HTTP o fallback por query parameter.
+     */
+    private String extractToken(HttpServletRequest request) {
+        String authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
+        if (StringUtils.hasText(authHeader) && authHeader.startsWith(BEARER_PREFIX)) {
+            return authHeader.substring(BEARER_PREFIX.length()).trim();
+        }
+
+        // Soporte controlado para canales persistentes / streaming
+        return request.getParameter(TOKEN_PARAM);
+    }
+
+    /**
+     * Valida, procesa y asienta la identidad en el ecosistema de Spring Security.
+     */
+    private void setupAuthentication(String token, HttpServletRequest request) {
+        if (SecurityContextHolder.getContext().getAuthentication() != null) {
+            return;
+        }
+
+        String email = jwtProvider.getEmailFromToken(token);
+        List<GrantedAuthority> authorities = jwtProvider.getAuthoritiesFromToken(token);
+
+        // Si el token criptográfico carece de jerarquía, el EntryPoint responderá un 401 unificado
+        if (authorities.isEmpty()) {
+            log.warn("[SEGURIDAD PERIMETRAL] Intento de acceso denegado: Token sin roles asignados: {}", email);
+            return;
+        }
+
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                email, null, authorities
+        );
+
+        authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        log.debug("[AUDITORÍA] Autenticación establecida exitosamente para el principal: {}", email);
     }
 }

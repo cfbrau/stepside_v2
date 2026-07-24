@@ -1,87 +1,64 @@
 package com.stepside.StepSide.common.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.stream.Collectors;
 
 /**
- * Interceptor global de excepciones corporativo de StepSide.
- * Saneado por Fabián bajo estrictas normas NoSQL para el soporte de MongoDB Atlas.
+ * CONTROLADOR PERIMETRAL GLOBAL DE EXCEPCIONES: Ecosistema StepSide.
+ * Saneado bajo especificaciones de seguridad OWASP, inmutabilidad y tipado estricto.
  */
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     /**
-     * Captura errores de lógica de negocio o argumentos inválidos.
-     * Transforma un feo error 500 en un prolijo HTTP 400 Bad Request.
-     */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponseDto> handleIllegalArgumentException(IllegalArgumentException ex, HttpServletRequest request) {
-        String message = ex.getMessage() != null ? ex.getMessage() : "";
-
-        if (message.toLowerCase().contains("no existe") || message.toLowerCase().contains("no se encontró")) {
-            ErrorResponseDto error = new ErrorResponseDto(
-                    LocalDateTime.now(),
-                    HttpStatus.NOT_FOUND.value(),
-                    "Recurso No Encontrado",
-                    ex.getMessage(),
-                    request.getRequestURI(),
-                    null
-            );
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
-        }
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Solicitud Incorrecta",
-                ex.getMessage(),
-                request.getRequestURI(),
-                null
-        );
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
-    }
-
-    /**
-     * Intercepta los fallos de validaciones de Spring (@Valid / @NotBlank / @Size).
-     * Devuelve una lista detallada campo por campo con un HTTP 400 Bad Request.
+     * Captura errores de validación de esquemas JSON (@Valid).
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponseDto> handleValidationExceptions(MethodArgumentNotValidException ex, HttpServletRequest request) {
-        Map<String, String> errors = new HashMap<>();
+    public ResponseEntity<ErrorResponseDto> handleValidationExceptions(
+            MethodArgumentNotValidException ex, HttpServletRequest request) {
 
-        ex.getBindingResult().getAllErrors().forEach(error -> {
-            String fieldName = ((FieldError) error).getField();
-            String errorMessage = error.getDefaultMessage();
-            errors.put(fieldName, errorMessage);
-        });
+        // Uso de API de Streams optimizada para colectar mapas de validaciones
+        Map<String, String> errors = ex.getBindingResult().getFieldErrors().stream()
+                .collect(Collectors.toMap(
+                        FieldError::getField,
+                        error -> error.getDefaultMessage() != null ? error.getDefaultMessage() : "Campo inválido",
+                        (existente, nuevo) -> existente // Mitiga colisiones de campos duplicados
+                ));
 
-        ErrorResponseDto error = new ErrorResponseDto(
+        ErrorResponseDto errorDto = new ErrorResponseDto(
                 LocalDateTime.now(),
                 HttpStatus.BAD_REQUEST.value(),
                 "Error de Validación",
-                "El JSON enviado no cumple con las restricciones requeridas.",
+                "El JSON enviado no cumple con las restricciones de la plataforma.",
                 request.getRequestURI(),
                 errors
         );
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorDto);
     }
 
     /**
-     * MIGRACIÓN NOSQL: Captura fallos de ausencia de datos en colecciones BSON (MongoDB).
-     * Transforma la excepción nativa de Java en un prolijo HTTP 404 Not Found.
+     * Captura la ausencia de recursos basada en excepciones de la JVM.
      */
     @ExceptionHandler(NoSuchElementException.class)
-    public ResponseEntity<ErrorResponseDto> handleNoSuchElementException(NoSuchElementException ex, HttpServletRequest request) {
-        ErrorResponseDto error = new ErrorResponseDto(
+    public ResponseEntity<ErrorResponseDto> handleNoSuchElementException(
+            NoSuchElementException ex, HttpServletRequest request) {
+
+        ErrorResponseDto errorDto = new ErrorResponseDto(
                 LocalDateTime.now(),
                 HttpStatus.NOT_FOUND.value(),
                 "Recurso No Encontrado",
@@ -89,41 +66,45 @@ public class GlobalExceptionHandler {
                 request.getRequestURI(),
                 null
         );
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorDto);
     }
 
     /**
-     * MIGRACIÓN NOSQL: Captura violaciones de integridad de datos en el cluster de MongoDB Atlas.
-     * Saneado por Fabián para interpretar el error E11000 de duplicados.
+     * Captura accesos restringidos que alcanzaron la capa del controlador de Spring.
      */
-    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponseDto> handleAccessDeniedException(
+            AccessDeniedException ex, HttpServletRequest request) {
+
+        ErrorResponseDto errorDto = new ErrorResponseDto(
+                LocalDateTime.now(),
+                HttpStatus.FORBIDDEN.value(),
+                "Acceso Denegado",
+                "Su jerarquía de acceso no cuenta con los privilegios requeridos para este endpoint.",
+                request.getRequestURI(),
+                null
+        );
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorDto);
+    }
+
+    /**
+     * Captura violaciones de unicidad o restricciones de persistencia NoSQL.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ErrorResponseDto> handleDataIntegrityViolationException(
-            org.springframework.dao.DataIntegrityViolationException ex, HttpServletRequest request) {
+            DataIntegrityViolationException ex, HttpServletRequest request) {
 
-        String errorMessage = "";
-        String userMessage = "Error de consistencia de datos en la persistencia cloud.";
+        log.error("[PERSISTENCIA CLOUD ERROR] Infracción de restricciones en la base de datos: {}", ex.getMessage());
 
-        if (ex.getRootCause() != null) {
-            errorMessage = ex.getRootCause().getMessage().toLowerCase();
-        } else if (ex.getMessage() != null) {
-            errorMessage = ex.getMessage().toLowerCase();
+        String rootMessage = ex.getRootCause() != null ? ex.getRootCause().getMessage() : ex.getMessage();
+        String userMessage = "Conflicto de unicidad de datos en la persistencia. El registro ya existe.";
+
+        // Saneado seguro: Parsing limitado exclusivamente para orientar al cliente sin revelar la traza interna
+        if (rootMessage != null && rootMessage.contains("e11000")) {
+            userMessage = "Error de Registro: Los identificadores o credenciales ya se encuentran asociados a una entidad activa.";
         }
 
-        if (!errorMessage.isEmpty()) {
-            if (errorMessage.contains("unique") || errorMessage.contains("duplicada") ||
-                    errorMessage.contains("ya existe") || errorMessage.contains("registrado") || errorMessage.contains("e11000")) {
-
-                if (errorMessage.contains("email") || errorMessage.contains("correo") || errorMessage.contains("account")) {
-                    userMessage = "Error de Registro: El correo electrónico ingresado ya se encuentra asociado a una cuenta activa.";
-                } else if (errorMessage.contains("code") || errorMessage.contains("cuit") || errorMessage.contains("dni")) {
-                    userMessage = "Error de Identidad: El código de negocio o documento ya existe registrado en el sistema.";
-                } else {
-                    userMessage = "Error de duplicidad NoSQL: " + (ex.getRootCause() != null ? ex.getRootCause().getMessage() : ex.getMessage());
-                }
-            }
-        }
-
-        ErrorResponseDto error = new ErrorResponseDto(
+        ErrorResponseDto errorDto = new ErrorResponseDto(
                 LocalDateTime.now(),
                 HttpStatus.CONFLICT.value(),
                 "Conflicto de Datos",
@@ -131,59 +112,64 @@ public class GlobalExceptionHandler {
                 request.getRequestURI(),
                 null
         );
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorDto);
     }
 
     /**
-     * Captura fallos de credenciales inválidas, cuentas pendientes o bloqueadas.
-     * Transforma el error en un prolijo HTTP 401 Unauthorized corporativo.
+     * Captura rutas HTTP que no mapean a ningún controlador activo de la API.
      */
-    @ExceptionHandler(org.springframework.security.core.AuthenticationException.class)
-    public ResponseEntity<ErrorResponseDto> handleAuthenticationException(
-            org.springframework.security.core.AuthenticationException ex, HttpServletRequest request) {
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleNoResourceFoundException(
+            NoResourceFoundException ex, HttpServletRequest request) {
 
-        ErrorResponseDto error = new ErrorResponseDto(
+        ErrorResponseDto errorDto = new ErrorResponseDto(
                 LocalDateTime.now(),
-                HttpStatus.UNAUTHORIZED.value(),
-                "No Autorizado",
+                HttpStatus.NOT_FOUND.value(),
+                "Ruta Inexistente",
+                "El endpoint al que intenta acceder no existe en la plataforma.",
+                request.getRequestURI(),
+                null
+        );
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorDto);
+    }
+
+    /**
+     * Manejo limpio de argumentos inválidos genéricos.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponseDto> handleIllegalArgumentException(
+            IllegalArgumentException ex, HttpServletRequest request) {
+
+        ErrorResponseDto errorDto = new ErrorResponseDto(
+                LocalDateTime.now(),
+                HttpStatus.BAD_REQUEST.value(),
+                "Solicitud Incorrecta",
                 ex.getMessage(),
                 request.getRequestURI(),
                 null
         );
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorDto);
     }
 
     /**
-     * Captura errores de rutas inexistentes o recursos estáticos no encontrados en Spring Boot 3.
-     */
-    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
-    public ResponseEntity<ErrorResponseDto> handleNoResourceFoundException(
-            org.springframework.web.servlet.resource.NoResourceFoundException ex, HttpServletRequest request) {
-
-        ErrorResponseDto error = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.NOT_FOUND.value(),
-                "Ruta Inexistente",
-                "El endpoint o recurso al que intenta acceder no existe en la plataforma. Verifique la sintaxis de la URL.",
-                request.getRequestURI(),
-                null
-        );
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
-    }
-
-    /**
-     * Línea de defensa final. Captura cualquier excepción no controlada en el sistema.
+     * ESCUDO DE CONTENCIÓN FINAL (Zero-Knowledge): Previene fugas de infraestructura hacia el cliente.
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponseDto> handleAllUncaughtExceptions(Exception ex, HttpServletRequest request) {
-        ErrorResponseDto error = new ErrorResponseDto(
+    public ResponseEntity<ErrorResponseDto> handleAllUncaughtExceptions(
+            Exception ex, HttpServletRequest request) {
+
+        // Registro asíncrono forense detallado EXCLUSIVAMENTE en la consola del servidor (Seguridad)
+        log.error("[FALLO NO CONTROLADO] Incidente crítico perimetral detectado en el path: {} | Detalle: ",
+                request.getRequestURI(), ex);
+
+        ErrorResponseDto errorDto = new ErrorResponseDto(
                 LocalDateTime.now(),
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "Error Interno del Servidor",
-                "Ocurrió un error imprevisto en la plataforma. Por favor, contacte al administrador. Detalle: " + ex.getMessage(),
+                "Ocurrió un error imprevisto en la plataforma. Por favor, contacte soporte técnico utilizando el timestamp de telemetría.",
                 request.getRequestURI(),
                 null
         );
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorDto);
     }
 }

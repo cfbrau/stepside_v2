@@ -1,4 +1,18 @@
 steps:
+  # ====================================================================
+  # PASO PREVIO: Inyección Criptográfica Segura desde Secret Manager
+  # ====================================================================
+  - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        mkdir -p src/main/resources/arca
+        echo "$$ARCA_CRT" > src/main/resources/arca/consulta_cuit.crt
+        echo "$$ARCA_KEY" > src/main/resources/arca/mi_clave.key
+        echo "[CI/CD STEP SIDE] Archivos de ARCA montados con éxito en resources."
+    secretEnv: ['ARCA_CRT', 'ARCA_KEY']
+
   # Paso 1: Compilar la imagen inyectando la instalación de certificados CA
   - name: 'gcr.io/k8s-skaffold/pack'
     args:
@@ -29,3 +43,13 @@ options:
 
 images:
   - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
+
+# ====================================================================
+# CONFIGURACIÓN DE CONEXIÓN CON SECRET MANAGER
+# ====================================================================
+availableSecrets:
+  secretManager:
+    - versionName: projects/stepsidev2-499621/secrets/arca-certificado/versions/latest
+      env: 'ARCA_CRT'
+    - versionName: projects/stepsidev2-499621/secrets/arca-clave-privada/versions/latest
+      env: 'ARCA_KEY'

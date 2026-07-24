@@ -4,7 +4,7 @@ package com.stepside.StepSide.common.dto;
  * Contrato inmutable público para el transporte de metadatos de paginación de grillas NoSQL.
  */
 public record PaginationMetaDto(
-        int totalElements,
+        long totalElements,
         int totalPages,
         int currentPage
 ) {

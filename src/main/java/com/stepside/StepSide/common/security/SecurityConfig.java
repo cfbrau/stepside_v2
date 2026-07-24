@@ -1,10 +1,13 @@
 package com.stepside.StepSide.common.security;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -13,6 +16,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 
 @Configuration
@@ -20,70 +24,78 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SecurityConfig {
 
-    private final JwtFilter jwtFilter; // Inyección de nuestro nuevo filtro asíncrono
+    private final JwtFilter jwtFilter;
+
+    // Inyección limpia y desacoplada de los orígenes según el entorno activo
+    @Value("${stepside.security.cors.allowed-origins}")
+    private final List<String> allowedOrigins;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(csrf -> csrf.disable())
+                // DSL Moderna de Spring Security 3.x sin lambdas redundantes
+                .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
-                // MEJORA PRODUCTION: Captura fallas de tokens en canales de streaming en el microsegundo cero.
-                // Responde un error SSE limpio y libera el hilo de Tomcat sin romper sockets.
+                // MANEJO PERIMETRAL DE EXCEPCIONES: Captura fallas de tokens en microsegundo cero
                 .exceptionHandling(exception -> exception
                         .authenticationEntryPoint((request, response, authException) -> {
-                            String acceptHeader = request.getHeader("Accept");
+                            String acceptHeader = request.getHeader(HttpHeaders.ACCEPT);
+
+                            // Detección segura de canales streaming o Server-Sent Events (SSE)
                             if (acceptHeader != null && acceptHeader.contains("text/event-stream")) {
-                                response.setStatus(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED);
+                                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                                 response.setContentType("text/event-stream");
                                 response.setCharacterEncoding("UTF-8");
                                 response.getWriter().write("event: ERROR\ndata: {\"status\":\"UNAUTHORIZED\",\"reason\":\"Token expirado o inválido\"}\n\n");
                                 response.getWriter().flush();
                             } else {
-                                response.sendError(jakarta.servlet.http.HttpServletResponse.SC_UNAUTHORIZED, authException.getMessage());
+                                // Saneado: Evita revelar detalles crudos de excepciones internas
+                                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Acceso denegado: Credenciales no válidas.");
                             }
                         })
                 )
 
                 .authorizeHttpRequests(auth -> auth
-                        // 1. COMPUERTAS PÚBLICAS LIMITADAS A ONBOARDING Y LOGIN (Cerrado hermético)
+                        // 1. COMPUERTAS PÚBLICAS (Saneado: /error incluido en el perímetro de Spring Security)
                         .requestMatchers(
                                 "/api/auth/signup",
                                 "/api/auth/login",
                                 "/api/auth/forgot-password/**",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
-                                "/swagger-ui.html"
+                                "/swagger-ui.html",
+                                "/error" // Al permitirlo aquí, evitamos usar web.ignoring() que desprotegía el hilo
                         ).permitAll()
 
-                        // 2. COMPUERTAS AUTENTICADAS: El streaming exige estrictamente token firmado
+                        // 2. COMPUERTAS AUTENTICADAS
                         .requestMatchers("/api/users/**").authenticated()
 
-                        // 3. CIERRE PERIMETRAL GENERAL
+                        // 3. CIERRE PERIMETRAL GENERAL (Zero Trust)
                         .anyRequest().authenticated()
                 )
+                // Inyección perimetral de tu filtro personalizado
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
-
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(List.of(
-                "https://stepside-backend-v2-921706262238.southamerica-east1.run.app",
-                "http://localhost:5500",   // Puerto clásico de Live Server (VS Code)
-                "http://127.0.0.1:5500",   // Loopback clásico de Live Server
-                "http://localhost:3000",   // Puerto clásico de React / Next.js
-                "http://localhost:8080",
-                "http://127.0.0.1:8080",
-                "http://localhost:5173"    // Puerto clásico de Vite (React/Vue moderno)
-        ));
 
+        // Uso estricto de la propiedad dinámica inyectada desde los archivos properties
+        configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Cache-Control", "X-Requested-With"));
+
+        // Saneado: Uso de constantes HTTP estándar de Spring para mitigar errores de tipeo manual
+        configuration.setAllowedHeaders(List.of(
+                HttpHeaders.AUTHORIZATION,
+                HttpHeaders.CONTENT_TYPE,
+                HttpHeaders.CACHE_CONTROL,
+                "X-Requested-With"
+        ));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
@@ -94,11 +106,5 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
-    }
-
-    @Bean
-    public org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer webSecurityCustomizer() {
-        // Indica al núcleo que esta subruta de infraestructura no pertenece al dominio perimetral
-        return (web) -> web.ignoring().requestMatchers("/error");
     }
 }
