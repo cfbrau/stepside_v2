@@ -52,12 +52,6 @@ public class ArcaAuthServiceImpl {
     @Value("${stepside.arca.clave-string:}")
     private String claveString;
 
-    @Value("classpath:arca/consulta_cuit.crt")
-    private Resource certResource;
-
-    @Value("classpath:arca/mi_clave.key")
-    private Resource keyResource;
-
     static {
         if (Security.getProvider("BC") == null) {
             Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
@@ -129,44 +123,20 @@ public class ArcaAuthServiceImpl {
     private CMSSignedData generateCmsSignedData(String payload) throws Exception {
         X509Certificate certificate;
 
-        // EVALUACIÓN MINUCIOSA: Si el String está vacío, procesa el archivo físico del classpath
-        if (certificadoString == null || certificadoString.isBlank()) {
-            try (InputStream certIn = certResource.getInputStream()) {
-                CertificateFactory cf = CertificateFactory.getInstance("X.509");
-                certificate = (X509Certificate) cf.generateCertificate(certIn);
-            }
-        } else {
-            // SI ES UN STRING PLANO EN UNA LÍNEA (Base64 puro): Lo decodificamos directo a binario
-            byte[] certBytes = Base64.decode(certificadoString.trim().replaceAll("\\s+", ""));
-            try (InputStream certIn = new ByteArrayInputStream(certBytes)) {
-                CertificateFactory cf = CertificateFactory.getInstance("X.509");
-                certificate = (X509Certificate) cf.generateCertificate(certIn);
-            }
+        // Decodificamos directo a binario el String de las propiedades (Local o Cloud)
+        byte[] certBytes = Base64.decode(certificadoString.trim().replaceAll("\\s+", ""));
+        try (InputStream certIn = new ByteArrayInputStream(certBytes)) {
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            certificate = (X509Certificate) cf.generateCertificate(certIn);
         }
 
-        PrivateKey privateKey;
-        byte[] decodedKey;
-
-        if (claveString == null || claveString.isBlank()) {
-            try (InputStream keyIn = keyResource.getInputStream()) {
-                byte[] keyBytes = keyIn.readAllBytes();
-                String pem = new String(keyBytes, StandardCharsets.UTF_8)
-                        .replaceAll("-----BEGIN PRIVATE KEY-----", "")
-                        .replaceAll("-----END PRIVATE KEY-----", "")
-                        .replaceAll("-----BEGIN RSA PRIVATE KEY-----", "")
-                        .replaceAll("-----END RSA PRIVATE KEY-----", "")
-                        .replaceAll("\\s+", "");
-                decodedKey = Base64.decode(pem);
-            }
-        } else {
-            // SI ES TU VARIABLE DE PROPIEDADES EN UNA LÍNEA: Ya es un Base64 puros sin cabeceras PEM. Solo barremos espacios.
-            String limpiaClave = claveString.trim().replaceAll("\\s+", "");
-            decodedKey = Base64.decode(limpiaClave);
-        }
+        // Procesamos la clave privada directo desde la variable en una línea
+        String limpiaClave = claveString.trim().replaceAll("\\s+", "");
+        byte[] decodedKey = Base64.decode(limpiaClave);
 
         PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decodedKey);
         KeyFactory kf = KeyFactory.getInstance("RSA");
-        privateKey = kf.generatePrivate(keySpec);
+        PrivateKey privateKey = kf.generatePrivate(keySpec);
 
         CMSSignedDataGenerator signedDataGenerator = new CMSSignedDataGenerator();
         ContentSigner sha256Signer = new JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(privateKey);
@@ -186,4 +156,5 @@ public class ArcaAuthServiceImpl {
         CMSTypedData contentData = new CMSProcessableByteArray(payload.getBytes(StandardCharsets.UTF_8));
         return signedDataGenerator.generate(contentData, true);
     }
+
 }
