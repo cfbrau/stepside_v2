@@ -1,5 +1,5 @@
 steps:
-  # Paso 1: Compilar la imagen inyectando la instalación de certificados CA
+  # Paso 1: Compilar la imagen usando Buildpacks (Java 21)
   - name: 'gcr.io/k8s-skaffold/pack'
     args:
       - 'build'
@@ -8,13 +8,13 @@ steps:
       - '--env=GOOGLE_RUNTIME_VERSION=21'
       - '--env=MAVEN_OPTS=-Dmaven.test.skip=true'
 
-  # Paso 2: Subir la imagen a la nube
+  # Paso 2: Subir la imagen a Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
       - 'southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
 
-  # Paso 3: Desplegar en Cloud Run (Sintaxis oficial unificada por comas)
+  # Paso 3: Desplegar en Cloud Run inyectando TODA la configuración requerida
   - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'gcloud'
     args:
@@ -24,6 +24,7 @@ steps:
       - '--image=southamerica-east1-docker.pkg.dev/stepsidev2-499621/stepside-repo/stepside-backend-v2:$COMMIT_SHA'
       - '--region=southamerica-east1'
       - '--set-secrets=STEPSIDE_ARCA_CERTIFICADO_STRING=arca-certificado:latest,STEPSIDE_ARCA_CLAVE_STRING=arca-clave-privada:latest'
+      - '--set-env-vars=MONGO_USER=sistemasdiegoortega_db_user,MONGO_PWD=0a7ShnwfPYbQnPWj,MONGO_URL=positions.cetxiru.mongodb.net,DATABASE=trackingDB,STEPSIDE_JWT_SECRET=9a4f2c8d1e3b7a5f6c9e0b2d4a6f8e1c3b5a7d9e1f3a5b7c9d0e2f4a6b8c0d2e,STEPSIDE_JWT_EXPIRATION_HOURS=24,STEPSIDE_MAIL_HOST=://gmail.com,STEPSIDE_MAIL_PORT=587,STEPSIDE_MAIL_USERNAME=stepsideadmin@gmail.com,STEPSIDE_MAIL_PASSWORD=aubexkuytrwyvjcn,STEPSIDE_APPLICATION_NAME=StepSide,STEPSIDE_SECURITY_APPLICATION_ID=6a3063f35cffbbf10841647a,STEPSIDE_SECURITY_APPLICATION_NAME_PREFIX=BACKOFFICE'
 
 options:
   logging: CLOUD_LOGGING_ONLY
