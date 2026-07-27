@@ -12,17 +12,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
-
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Proveedor perimetral criptográfico para el ciclo de vida de los Tokens JWT.
- * Saneado bajo la especificación estricta de JJWT 0.12.5 y desacoplamiento de entornos.
- */
 @Slf4j
 @Component
 public class JwtProvider {
@@ -33,25 +28,19 @@ public class JwtProvider {
     private final SecretKey secretKey;
     private final long expirationTimeMillis;
 
-    // Inyección limpia y desacoplada desde tu archivo application.properties
     public JwtProvider(
             @Value("${stepside.jwt.secret}") String secretString,
-            @Value("${stepside.jwt.expiration-hours}") long expirationHours) {
+            @Value("${stepside.jwt.expiration-hours}") String expirationHoursStr) {
 
-        // Conversión segura de tu secreto a la interfaz criptográfica nativa de Java
         this.secretKey = Keys.hmacShaKeyFor(secretString.getBytes(StandardCharsets.UTF_8));
-        // Conversión elástica de horas configuradas a milisegundos de CPU
-        this.expirationTimeMillis = expirationHours * 60 * 60 * 1000;
+        long hours = Long.parseLong(expirationHoursStr.trim());
+        this.expirationTimeMillis = hours * 60 * 60 * 1000;
     }
 
-    /**
-     * Genera un Token JWT firmado utilizando la API moderna no-obsoleta de JJWT 0.12.x.
-     */
     public String generateToken(String email, String roleName) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expirationTimeMillis);
 
-        // CORRECTO: Uso de la API fluida recomendada para producción
         return Jwts.builder()
                 .subject(email.trim())
                 .claims(Map.of(ROLE_CLAIM, roleName.trim().toUpperCase()))
@@ -61,16 +50,10 @@ public class JwtProvider {
                 .compact();
     }
 
-    /**
-     * Extrae el email (Subject) que viene adentro del Token de manera segura.
-     */
     public String getEmailFromToken(String token) {
         return extractAllClaims(token).getSubject();
     }
 
-    /**
-     * Extrae y normaliza las autoridades para Spring Security, completando el contrato con el JwtFilter.
-     */
     public List<GrantedAuthority> getAuthoritiesFromToken(String token) {
         Claims claims = extractAllClaims(token);
         String role = claims.get(ROLE_CLAIM, String.class);
@@ -83,9 +66,6 @@ public class JwtProvider {
         return List.of(new SimpleGrantedAuthority(formattedRole));
     }
 
-    /**
-     * Valida si la firma del Token es legítima emitiendo logs específicos de auditoría forense.
-     */
     public boolean validateToken(String token) {
         try {
             Jwts.parser()
@@ -107,9 +87,6 @@ public class JwtProvider {
         return false;
     }
 
-    /**
-     * Centraliza el parsing seguro del payload del token.
-     */
     private Claims extractAllClaims(String token) {
         return Jwts.parser()
                 .verifyWith(secretKey)
