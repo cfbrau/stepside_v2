@@ -16,6 +16,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -27,11 +29,13 @@ public class SecurityConfig {
 
     public SecurityConfig(
             JwtFilter jwtFilter,
-            @Value("${stepside.security.cors.allowed-origins}") List<String> allowedOrigins) {
+            @Value("${stepside.security.cors.allowed-origins}") String allowedOriginsStr) {
         this.jwtFilter = jwtFilter;
-        this.allowedOrigins = allowedOrigins;
+        // Dividimos la cadena usando comas de forma segura y robusta controlada por Java
+        this.allowedOrigins = Arrays.asList(allowedOriginsStr.split(","));
     }
 
+    //Filtrado
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, CorsConfigurationSource corsConfigurationSource) throws Exception {
         http
