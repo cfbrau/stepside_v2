@@ -29,9 +29,9 @@ public class SecurityConfig {
 
     public SecurityConfig(
             JwtFilter jwtFilter,
-            @Value("${stepside.security.cors.allowed-origins}") String allowedOriginsStr) {
+            @Value("${stepside.security.cors.allowed-origins:${STEPSIDE_CORS_ALLOWED_ORIGINS}}") String allowedOriginsStr) {
         this.jwtFilter = jwtFilter;
-        // Dividimos la cadena usando comas de forma segura y robusta controlada por Java
+        // Ahora sí, Java lee el string de la consola web y lo corta por las comas
         this.allowedOrigins = Arrays.asList(allowedOriginsStr.split(","));
     }
 
