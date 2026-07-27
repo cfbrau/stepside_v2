@@ -1,5 +1,6 @@
 package com.stepside.StepSide.common.security;
 
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -16,19 +17,24 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-import jakarta.servlet.http.HttpServletResponse;
+
 import java.util.List;
 
 @Configuration
 @EnableWebSecurity
-@RequiredArgsConstructor
+// 1. ELIMINAMOS @RequiredArgsConstructor para que Lombok no genere un constructor incompatible
 public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
+    private final List<String> allowedOrigins; // BUENA PRÁCTICA: Se mantiene "final"
 
-    // Inyección limpia y desacoplada de los orígenes según el entorno activo
-    @Value("${stepside.security.cors.allowed-origins}")
-    private final List<String> allowedOrigins;
+    // 2. CONSTRUCTOR MANUAL: El @Value se coloca dentro del parámetro, permitiendo a Spring resolverlo antes de congelar el objeto
+    public SecurityConfig(
+            JwtFilter jwtFilter,
+            @Value("${stepside.security.cors.allowed-origins}") List<String> allowedOrigins) {
+        this.jwtFilter = jwtFilter;
+        this.allowedOrigins = allowedOrigins;
+    }
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
