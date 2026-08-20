@@ -1,7 +1,7 @@
 package com.stepside.StepSide.integration.arca.controller;
 
 import com.stepside.StepSide.integration.arca.dto.ArcaPersonaResponseDto;
-import com.stepside.StepSide.integration.arca.service.impl.ArcaPadronServiceImpl;
+import com.stepside.StepSide.integration.arca.service.ArcaPadronService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -17,8 +17,8 @@ import org.springframework.web.bind.annotation.RestController;
 @Slf4j
 public class ArcaPadronController {
 
-    // Inyectamos la implementación directamente para acceder al método mapeado
-    private final ArcaPadronServiceImpl arcaPadronService;
+    // Inyectamos la interfaz para mantener el controlador desacoplado de la implementación concreta
+    private final ArcaPadronService arcaPadronService;
 
     /**
      * Endpoint unificado de producción: Retorna DTO procesado directo al Frontend de StepSide.

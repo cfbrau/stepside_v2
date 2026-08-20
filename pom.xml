@@ -21,28 +21,48 @@
 	</properties>
 
 	<dependencies>
-		<!-- CENTRAL DE BASE DE DATOS: MONGODB ATLAS DRIVER -->
+
+		<!-- 1. ECOSISTEMA WEB Y SEGURIDAD TRADICIONAL (MVC) -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-mongodb</artifactId>
+			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
-
-		<!-- PERÍMETRO DE SEGURIDAD CONTRA INTENTOS FALLIDOS -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
 
+		<!-- 2. INFRAESTRUCTURA NoSQL (Homologado con P2) -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-mongodb</artifactId>
+		</dependency>
+
+		<!-- 3. MOTOR DE VALIDACIÓN Y FIRMA JWT 0.12.5 (Idéntico a P2) -->
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-api</artifactId>
+			<version>0.12.5</version>
+		</dependency>
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-impl</artifactId>
+			<version>0.12.5</version>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-jackson</artifactId>
+			<version>0.12.5</version>
+			<scope>runtime</scope>
+		</dependency>
+
+
+
 		<!-- ESCUDO DEFENSIVO DE VALIDACIONES WEB -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-validation</artifactId>
-		</dependency>
-
-		<!-- COMPUERTA RESTFUL Y SERVIDOR EMBAJADO TOMCAT -->
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-web</artifactId> <!-- SANEADO: Nombre correcto de la dependencia -->
 		</dependency>
 
 		<!-- MOTOR DE NOTIFICACIONES ELECTRÓNICAS CLOUD -->
@@ -70,24 +90,7 @@
 			<scope>test</scope>
 		</dependency>
 
-		<!-- MOTOR DE GOBIERNO DE TOKENS JWT (JJWT) -->
-		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-api</artifactId>
-			<version>0.12.5</version>
-		</dependency>
-		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-impl</artifactId>
-			<version>0.12.5</version>
-			<scope>runtime</scope>
-		</dependency>
-		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-jackson</artifactId>
-			<version>0.12.5</version>
-			<scope>runtime</scope>
-		</dependency>
+
 		<!-- MOTOR DE DOCUMENTACIÓN PERIMETRAL SWAGGER (SPRINGDOC OPENAPI) -->
 		<dependency>
 			<groupId>org.springdoc</groupId>

@@ -39,7 +39,7 @@ public class Tto {
     @Field("tto_type_name")
     private String ttoTypeName;
 
-    @Field("tto_status_name")
+    @Field("status_name")
     private String ttoStatusName;
 
     @Field("created_at")

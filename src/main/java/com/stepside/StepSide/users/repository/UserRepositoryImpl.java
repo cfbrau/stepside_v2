@@ -10,16 +10,53 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Repository;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Repository
 public class UserRepositoryImpl implements UserRepositoryCustom {
 
     @Autowired
     private MongoTemplate mongoTemplate;
+
+    @Override
+    public Optional<String> findRoleNameByUserAndApp(ObjectId userId, String appId) {
+        if (userId == null || appId == null || appId.isBlank()) {
+            return Optional.empty();
+        }
+
+        Query appQuery = new Query(Criteria.where("user_id").is(userId)
+                .and("appId").is(appId.trim()));
+        Document userAppDoc = mongoTemplate.findOne(appQuery, Document.class, "user_applications");
+
+        if (userAppDoc == null) {
+            return Optional.empty();
+        }
+
+        String roleIdStr = userAppDoc.get("role_id") != null ? userAppDoc.get("role_id").toString() : null;
+        if (roleIdStr == null || roleIdStr.isBlank()) {
+            return Optional.empty();
+        }
+
+        ObjectId roleObjectId = new ObjectId(roleIdStr);
+        Query queryRol = new Query(Criteria.where("_id").is(roleObjectId));
+        Document roleDoc = mongoTemplate.findOne(queryRol, Document.class, "roles");
+
+        if (roleDoc == null) {
+            return Optional.empty();
+        }
+
+        String pureRoleName = roleDoc.getString("name");
+        if (pureRoleName == null || pureRoleName.isBlank()) {
+            return Optional.empty();
+        }
+
+        return Optional.of(pureRoleName.trim());
+    }
 
     @SuppressWarnings("unchecked")
     @Override
@@ -69,7 +106,7 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
                     if (typeIdObj != null && !typeIdObj.toString().trim().isEmpty()) {
                         relationTypeIds.add(typeIdObj.toString());
                     }
-                    Object parentIdObj = rel.get("parent_id");
+                    Object parentIdObj = rel.get("relation_id");
                     if (parentIdObj != null && ObjectId.isValid(parentIdObj.toString())) {
                         parentCompanyIds.add(new ObjectId(parentIdObj.toString()));
                     }
@@ -158,19 +195,19 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
                         String typeName = (typeId != null) ? relationTypeMap.getOrDefault(typeId.toString(), "UNKNOWN_TYPE") : "UNKNOWN_TYPE";
                         relMap.put("relation_type_name", typeName);
 
-                        // Mapeo del Nombre de la Empresa utilizando parent_id
-                        Object parentId = rel.get("parent_id");
+                        // Mapeo del Nombre de la Empresa utilizando related_id
+                        Object parentId = rel.get("relation_id");
                         String compIdStr = parentId != null ? parentId.toString() : null;
 
                         String companyName = (compIdStr != null) ? companyMap.getOrDefault(compIdStr, "UNKNOWN_COMPANY") : "UNKNOWN_COMPANY";
                         relMap.put("related_name", companyName);
 
                         String companyCuit = (compIdStr != null) ? companyCuitMap.getOrDefault(compIdStr, "N/A") : "N/A";
-                        relMap.put("code", companyCuit);
+                        relMap.put("cuit", companyCuit);
 
                         // FIX HIGIENE: Removemos del mapa final las claves internas redundantes para el Frontend
                         relMap.remove("relation_type_id");
-                        relMap.remove("code");
+                        relMap.remove("parent_id");
 
                         enrichedRelations.add(relMap);
                     }
@@ -204,4 +241,68 @@ public class UserRepositoryImpl implements UserRepositoryCustom {
 
         return finalResults;
     }
+
+    @Override
+    public Optional<String> findCompanyIdByUserId(ObjectId userId) {
+        if (userId == null) {
+            return Optional.empty();
+        }
+
+        try {
+            // 1. Buscamos el usuario en la colección users para extraer su ttoId primario
+            Document userDoc = mongoTemplate.findOne(
+                    Query.query(Criteria.where("_id").is(userId)),
+                    Document.class,
+                    "users"
+            );
+            if (userDoc == null) return Optional.empty();
+
+            String ttoIdStr = userDoc.getString("ttoId");
+            if (ttoIdStr == null || ttoIdStr.isBlank()) return Optional.empty();
+
+            // 2. Consultamos la ficha intermedia TTO soportando tipos de datos elásticos
+            String cleanTtoId = ttoIdStr.trim();
+            Document ttoDoc = null;
+            if (ObjectId.isValid(cleanTtoId)) {
+                ttoDoc = mongoTemplate.findOne(
+                        Query.query(Criteria.where("_id").is(new ObjectId(cleanTtoId))),
+                        Document.class,
+                        "ttos"
+                );
+            }
+            if (ttoDoc == null) {
+                ttoDoc = mongoTemplate.findOne(
+                        Query.query(Criteria.where("_id").is(cleanTtoId)),
+                        Document.class,
+                        "ttos"
+                );
+            }
+
+            if (ttoDoc == null) return Optional.empty();
+
+            // 3. Recorremos el árbol relacional corporativo (Filtro homólogo "WORK_FOR")
+            List<?> relationsList = ttoDoc.get("relations", List.class);
+            if (relationsList != null) {
+                for (Object relObj : relationsList) {
+                    if (relObj instanceof Document) {
+                        Document relDoc = (Document) relObj;
+                        String relationType = relDoc.getString("relation_type_id");
+
+                        // Homologado estrictamente con tu constante de negocio
+                        if ("6a305b8d5cffbbf10841644f".equalsIgnoreCase(relationType)) {
+                            String relationId = relDoc.getString("relation_id");
+                            if (relationId != null && !relationId.isBlank()) {
+                                return Optional.of(relationId.trim());
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("[CUSTOM-REPO ERROR] Falla al resolver empresa multitenant para el usuario {}: {}", userId, e.getMessage());
+        }
+
+        return Optional.empty();
+    }
+
 }

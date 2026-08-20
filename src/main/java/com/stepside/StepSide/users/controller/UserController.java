@@ -1,12 +1,10 @@
 package com.stepside.StepSide.users.controller;
 
 import com.stepside.StepSide.users.dto.CompanyUsersGroupDto;
-import com.stepside.StepSide.users.dto.UserApprovalRequestDTO;
 import com.stepside.StepSide.users.dto.UserResponseDTO;
 import com.stepside.StepSide.users.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -26,12 +24,7 @@ public class UserController {
 
     private final UserService userService;
 
-    /**
-     * REQUERIMIENTO 1 y 2: Recupera la nómina general de usuarios hidratada con sus TTOs.
-     * Soporta filtrado opcional por identificador de estado (ObjectId) o nombre.
-     * GET /api/users?status=6a3064575cffbbf108416480
-     */
-    @GetMapping
+    @GetMapping ("/getUsersWithFilter")
     public ResponseEntity<List<UserResponseDTO>> getUsersWithFilter(
             @RequestParam(name = "status", required = false) String status) {
 
@@ -39,10 +32,6 @@ public class UserController {
         return ResponseEntity.ok(response);
     }
 
-    /**
-     * REQUERIMIENTO 3: Vista jerárquica especializada para el Backoffice.
-     * GET /api/users/grouped-by-company
-     */
     @GetMapping("/grouped-by-company")
     public ResponseEntity<List<CompanyUsersGroupDto>> getUsersGroupedByCompany() {
         List<CompanyUsersGroupDto> response = userService.getUsersGroupedByCompany();
@@ -54,18 +43,24 @@ public class UserController {
      * POST /api/users/{id}/approve
      */
     @PostMapping("/{id}/approve")
-    @Operation(summary = "Aprobar cuenta de usuario", description = "Ejecuta la mutación atómica del estado a ACTIVE, persiste masivamente las aplicaciones/roles asignados en la tabla pivote y gatilla la alerta asíncrona por correo.")
+    @Operation(summary = "Aprobar cuenta de usuario", description = "Ejecuta la mutación atómica del estado del usuario y su TTO asociado a ACTIVE, y gatilla la alerta asíncrona por correo.")
     public ResponseEntity<Void> approveUser(
-            @PathVariable(name = "id") String userId,
-            @Valid @RequestBody UserApprovalRequestDTO requestDto) {
+            @PathVariable(name = "id") String userId) {
 
-        userService.approveUser(userId, requestDto);
+        userService.approveUser(userId);
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 
-    // ============================================================================
-    // ESPACIO RESERVADO PARA FUTUROS REQUERIMIENTOS:
-    // @PutMapping("/{id}") -> Modificar datos del perfil del usuario
-    // @DeleteMapping("/{id}") -> Baja lógica o suspensión de accesos
-    // ============================================================================
+    /**
+     * WORKFLOW ADMINISTRATIVO: Ejecuta la baja lógica de la cuenta en el clúster NoSQL.
+     * POST /api/users/{id}/deactivate
+     */
+    @PostMapping("/{id}/deactivate")
+    @Operation(summary = "Desactivar cuenta de usuario", description = "Ejecuta la mutación atómica del estado del usuario y su TTO asociado a DELETED.")
+    public ResponseEntity<Void> deactivateUser(
+            @PathVariable(name = "id") String userId) {
+
+        userService.deactivateUser(userId);
+        return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+    }
 }

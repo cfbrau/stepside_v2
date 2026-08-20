@@ -1,5 +1,7 @@
 package com.stepside.StepSide.common.security;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.stepside.StepSide.common.exception.ErrorResponseDto;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -17,6 +19,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 
@@ -26,13 +29,18 @@ public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
     private final List<String> allowedOrigins;
+    private final String[] publicPaths;
+    private final ObjectMapper objectMapper;
 
     public SecurityConfig(
             JwtFilter jwtFilter,
-            @Value("${stepside.security.cors.allowed-origins:${STEPSIDE_CORS_ALLOWED_ORIGINS}}") String allowedOriginsStr) {
+            ObjectMapper objectMapper,
+            @Value("${stepside.security.cors.allowed-origins}") String allowedOriginsStr,
+            @Value("${stepside.security.public-paths}") String[] publicPaths) {
         this.jwtFilter = jwtFilter;
-        // Ahora sí, Java lee el string de la consola web y lo corta por las comas
+        this.objectMapper = objectMapper;
         this.allowedOrigins = Arrays.asList(allowedOriginsStr.split("[,;]"));
+        this.publicPaths = publicPaths;
     }
 
     //Filtrado
@@ -54,21 +62,26 @@ public class SecurityConfig {
                                 response.getWriter().write("event: ERROR\ndata: {\"status\":\"UNAUTHORIZED\",\"reason\":\"Token expirado o inválido\"}\n\n");
                                 response.getWriter().flush();
                             } else {
-                                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Acceso denegado: Credenciales no válidas.");
+                                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                                response.setContentType("application/json");
+                                response.setCharacterEncoding("UTF-8");
+
+                                ErrorResponseDto errorResponse = new ErrorResponseDto(
+                                        LocalDateTime.now(),
+                                        HttpServletResponse.SC_UNAUTHORIZED,
+                                        "INVALID_CREDENTIALS",
+                                        "Credenciales inválidas.",
+                                        request.getRequestURI(),
+                                        null
+                                );
+
+                                objectMapper.writeValue(response.getOutputStream(), errorResponse);
                             }
                         })
                 )
 
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
-                                "/api/auth/signup",
-                                "/api/auth/login",
-                                "/api/auth/forgot-password/**",
-                                "/swagger-ui/**",
-                                "/v3/api-docs/**",
-                                "/swagger-ui.html",
-                                "/error"
-                        ).permitAll()
+                        .requestMatchers(publicPaths).permitAll()
                         .requestMatchers("/api/users/**").authenticated()
                         .anyRequest().authenticated()
                 )

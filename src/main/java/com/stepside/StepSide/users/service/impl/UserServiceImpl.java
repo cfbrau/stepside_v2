@@ -1,37 +1,46 @@
 package com.stepside.StepSide.users.service.impl;
 
+import com.mongodb.client.result.UpdateResult;
+import com.stepside.StepSide.common.exception.domain.UserAlreadyActiveException;
+import com.stepside.StepSide.common.exception.domain.UserAlreadyDeletedException;
 import com.stepside.StepSide.users.dto.CompanyUsersGroupDto;
-import com.stepside.StepSide.users.dto.UserApprovalRequestDTO;
 import com.stepside.StepSide.users.dto.UserResponseDTO;
 import com.stepside.StepSide.users.repository.UserRepository;
 import com.stepside.StepSide.users.service.UserService;
 import com.stepside.StepSide.notification.dto.EmailMessageDto;
-import com.stepside.StepSide.notification.service.EmailService;
+import com.stepside.StepSide.notification.service.EmailOutboxService;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.bson.types.ObjectId;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
 
-    private static final Logger log = LoggerFactory.getLogger(UserServiceImpl.class);
+    private static final ObjectId ACTIVE_USER_STATUS_ID = new ObjectId("6a3064575cffbbf108416480");
+    private static final ObjectId ACTIVE_TTO_STATUS_ID = new ObjectId("6a3067975cffbbf108416496");
+    private static final String ACTIVE_STATUS_NAME = "ACTIVE";
+    private static final ObjectId DELETED_USER_STATUS_ID = new ObjectId("6a3064575cffbbf108416481");
+    private static final ObjectId DELETED_TTO_STATUS_ID = new ObjectId("6a7a464a22fbb0ed807604ac");
+    private static final String DELETED_STATUS_NAME = "DELETED";
 
     private final UserRepository userRepository;
     private final MongoTemplate mongoTemplate;
-    private final EmailService emailService;
+    private final EmailOutboxService emailOutboxService;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
     public List<UserResponseDTO> getUsersWithFilter(String status) {
@@ -55,108 +64,110 @@ public class UserServiceImpl implements UserService {
 
         return userRepository.findAllUsersWithTto(targetStatusId);
     }
+    
     @Override
-    @org.springframework.transaction.annotation.Transactional
-    public void approveUser(String ttoId, UserApprovalRequestDTO request) {
-        if (request.permissions() == null || request.permissions().isEmpty()) {
-            throw new IllegalArgumentException("Validación fallida: Se requiere la asignación de al menos una aplicación para proceder.");
-        }
+    public void approveUser(String userIdentifier) {
+        transactionTemplate.executeWithoutResult(status -> {
+            Query userQuery = new Query(
+                    new Criteria().orOperator(
+                            Criteria.where("ttoId").is(userIdentifier),
+                            Criteria.where("_id").is(ObjectId.isValid(userIdentifier) ? new ObjectId(userIdentifier) : userIdentifier)
+                    )
+            );
+            userQuery.fields().include("_id", "email", "status_id", "ttoId");
 
-        Query statusQuery = new Query(Criteria.where("name").is("ACTIVE"));
-        statusQuery.fields().include("_id");
-        Document statusDoc = mongoTemplate.findOne(statusQuery, Document.class, "user_statuses");
-        if (statusDoc == null) {
-            throw new IllegalStateException("Error de consistencia: No se localizó el estado 'ACTIVE' en la colección user_statuses.");
-        }
-        ObjectId activeStatusId = statusDoc.getObjectId("_id");
-
-        Query userQuery = new Query(
-                new Criteria().orOperator(
-                        Criteria.where("ttoId").is(ttoId),
-                        Criteria.where("_id").is(ObjectId.isValid(ttoId) ? new ObjectId(ttoId) : ttoId)
-                )
-        );
-        userQuery.fields().include("_id", "email", "status_id");
-
-        Document userDoc = mongoTemplate.findOne(userQuery, Document.class, "users");
-        if (userDoc == null) {
-            throw new NoSuchElementException("Usuario no encontrado en el clúster NoSQL con el identificador provisto: " + ttoId);
-        }
-
-        if (activeStatusId.equals(userDoc.get("status_id"))) {
-            throw new IllegalArgumentException("Operación inválida: La cuenta de usuario ya se encuentra aprobada y en estado ACTIVO.");
-        }
-        ObjectId userId = userDoc.getObjectId("_id");
-
-        Map<String, String> incomingPermissions = request.permissions();
-
-        Query appsQuery = new Query(Criteria.where("name").in(incomingPermissions.keySet()));
-        appsQuery.fields().include("_id", "name");
-        List<Document> fetchedApps = mongoTemplate.find(appsQuery, Document.class, "applications");
-
-        List<ObjectId> appIds = fetchedApps.stream().map(doc -> doc.getObjectId("_id")).collect(Collectors.toList());
-        List<String> roleNames = new ArrayList<>(incomingPermissions.values());
-
-        Query rolesQuery = new Query(Criteria.where("app_id").in(appIds).and("name").in(roleNames));
-        rolesQuery.fields().include("_id", "app_id", "name");
-        List<Document> fetchedRoles = mongoTemplate.find(rolesQuery, Document.class, "roles");
-
-        Map<String, ObjectId> roleCacheMap = fetchedRoles.stream().collect(Collectors.toMap(
-                role -> role.getObjectId("app_id").toString() + "_" + role.getString("name"),
-                role -> role.getObjectId("_id"),
-                (existing, replacement) -> existing
-        ));
-
-        List<Document> userApplicationsToInsert = new ArrayList<>(fetchedApps.size());
-        Date currentDate = new Date();
-
-        for (Document appDoc : fetchedApps) {
-            String appIdStr = appDoc.getObjectId("_id").toString();
-            String appName = appDoc.getString("name");
-            String targetRoleName = incomingPermissions.get(appName);
-
-            String cacheKey = appIdStr + "_" + targetRoleName;
-
-            if (roleCacheMap.containsKey(cacheKey)) {
-                ObjectId roleId = roleCacheMap.get(cacheKey);
-
-                Document userAppDoc = new Document()
-                        .append("user_id", userId)
-                        .append("appId", appIdStr)
-                        .append("role_id", roleId)
-                        .append("assignedAt", currentDate)
-                        .append("_class", "com.minorityreport.portal.auth.model.UserApplication");
-
-                userApplicationsToInsert.add(userAppDoc);
-            } else {
-                log.warn("Omisión defensiva: No existe la combinación del rol '{}' para la aplicación '{}' en los catálogos.", targetRoleName, appName);
+            Document userDoc = mongoTemplate.findOne(userQuery, Document.class, "users");
+            if (userDoc == null) {
+                throw new NoSuchElementException("Usuario no encontrado en el clúster NoSQL con el identificador provisto: " + userIdentifier);
             }
-        }
 
-        if (userApplicationsToInsert.isEmpty()) {
-            throw new IllegalArgumentException("Validación fallida: Ninguna de las combinaciones de Aplicación y Rol provistas es válida en el sistema.");
-        }
+            if (ACTIVE_USER_STATUS_ID.equals(userDoc.get("status_id"))) {
+                throw new UserAlreadyActiveException();
+            }
 
-        mongoTemplate.insert(userApplicationsToInsert, "user_applications");
+            String ttoId = userDoc.getString("ttoId");
+            if (ttoId == null || !ObjectId.isValid(ttoId)) {
+                throw new IllegalStateException("Error de consistencia: El usuario no posee un TTO asociado válido.");
+            }
 
-        Update update = new Update();
-        update.set("status_id", activeStatusId);
-        update.set("status_name", "ACTIVE");
-        update.set("failed_attempts", 0);
-        update.set("updated_at", currentDate);
-        mongoTemplate.updateFirst(userQuery, update, "users");
+            Date currentDate = new Date();
 
-        String userEmail = userDoc.getString("email");
-        Map<String, Object> templateVariables = new HashMap<>();
-        templateVariables.put("mail_registered_user", userEmail);
+            Update userUpdate = new Update();
+            userUpdate.set("status_id", ACTIVE_USER_STATUS_ID);
+            userUpdate.set("status_name", ACTIVE_STATUS_NAME);
+            userUpdate.set("failed_attempts", 0);
+            userUpdate.set("updated_at", currentDate);
+            mongoTemplate.updateFirst(userQuery, userUpdate, "users");
 
-        EmailMessageDto emailDto = new EmailMessageDto(
-                userEmail,
-                "Aviso de Sistema - Cuenta Activada",
-                "ACCEPT_APPROVAL",
-                templateVariables
-        );
-        emailService.sendEmail(emailDto);
+            Query ttoQuery = new Query(Criteria.where("_id").is(new ObjectId(ttoId)));
+            Update ttoUpdate = new Update();
+            ttoUpdate.set("status_id", ACTIVE_TTO_STATUS_ID);
+            ttoUpdate.set("status_name", ACTIVE_STATUS_NAME);
+            ttoUpdate.set("updated_at", currentDate);
+            ttoUpdate.unset("tto_status_name");
+            UpdateResult ttoUpdateResult = mongoTemplate.updateFirst(ttoQuery, ttoUpdate, "ttos");
+            if (ttoUpdateResult.getMatchedCount() == 0) {
+                throw new IllegalStateException("Error de consistencia: No se encontró el TTO asociado al usuario.");
+            }
+
+            String userEmail = userDoc.getString("email");
+            Map<String, Object> templateVariables = new HashMap<>();
+            templateVariables.put("mail_registered_user", userEmail);
+
+            EmailMessageDto emailDto = new EmailMessageDto(
+                    userEmail,
+                    "Aviso de Sistema - Cuenta Activada",
+                    "ACCEPT_APPROVAL",
+                    templateVariables
+            );
+            emailOutboxService.enqueue(emailDto);
+        });
+    }
+
+    @Override
+    public void deactivateUser(String userIdentifier) {
+        transactionTemplate.executeWithoutResult(status -> {
+            Query userQuery = new Query(
+                    new Criteria().orOperator(
+                            Criteria.where("ttoId").is(userIdentifier),
+                            Criteria.where("_id").is(ObjectId.isValid(userIdentifier) ? new ObjectId(userIdentifier) : userIdentifier)
+                    )
+            );
+            userQuery.fields().include("_id", "status_id", "ttoId");
+
+            Document userDoc = mongoTemplate.findOne(userQuery, Document.class, "users");
+            if (userDoc == null) {
+                throw new NoSuchElementException("Usuario no encontrado en el clúster NoSQL con el identificador provisto: " + userIdentifier);
+            }
+
+            if (DELETED_USER_STATUS_ID.equals(userDoc.get("status_id"))) {
+                throw new UserAlreadyDeletedException();
+            }
+
+            String ttoId = userDoc.getString("ttoId");
+            if (ttoId == null || !ObjectId.isValid(ttoId)) {
+                throw new IllegalStateException("Error de consistencia: El usuario no posee un TTO asociado válido.");
+            }
+
+            Date currentDate = new Date();
+
+            Update userUpdate = new Update();
+            userUpdate.set("status_id", DELETED_USER_STATUS_ID);
+            userUpdate.set("status_name", DELETED_STATUS_NAME);
+            userUpdate.set("updated_at", currentDate);
+            mongoTemplate.updateFirst(userQuery, userUpdate, "users");
+
+            Query ttoQuery = new Query(Criteria.where("_id").is(new ObjectId(ttoId)));
+            Update ttoUpdate = new Update();
+            ttoUpdate.set("status_id", DELETED_TTO_STATUS_ID);
+            ttoUpdate.set("status_name", DELETED_STATUS_NAME);
+            ttoUpdate.set("updated_at", currentDate);
+            ttoUpdate.unset("tto_status_name");
+            UpdateResult ttoUpdateResult = mongoTemplate.updateFirst(ttoQuery, ttoUpdate, "ttos");
+            if (ttoUpdateResult.getMatchedCount() == 0) {
+                throw new IllegalStateException("Error de consistencia: No se encontró el TTO asociado al usuario.");
+            }
+        });
     }
 
     @Override
@@ -178,7 +189,7 @@ public class UserServiceImpl implements UserService {
         for (UserResponseDTO user : allUsers) {
             if (user.personRelations() != null) {
                 for (Map<String, Object> rel : user.personRelations()) {
-                    Object parentIdObj = rel.get("parent_id");
+                    Object parentIdObj = rel.get("relation_id");
                     // Validamos que el ID tenga el formato hexadecimal correcto de 24 caracteres de MongoDB
                     if (parentIdObj != null && org.bson.types.ObjectId.isValid(parentIdObj.toString())) {
                         parentCompanyIds.add(new org.bson.types.ObjectId(parentIdObj.toString()));
@@ -246,7 +257,7 @@ public class UserServiceImpl implements UserService {
             // Si el usuario registra relaciones con organizaciones en sus TTOs
             if (user.personRelations() != null && !user.personRelations().isEmpty()) {
                 for (Map<String, Object> rel : user.personRelations()) {
-                    Object parentIdObj = rel.get("parent_id");
+                    Object parentIdObj = rel.get("relation_id");
 
                     if (parentIdObj != null) {
                         String compId = parentIdObj.toString();
@@ -301,15 +312,15 @@ public class UserServiceImpl implements UserService {
             companyCuitMap.remove(unassignedId);
         }
 
-        // PASO 6: Transformación y Despacho.
-        // Convertimos nuestro mapa de grupos de Java utilizando la API de Streams para retornar la lista inmutable de CompanyUsersGroupDto.
         return groupedMap.entrySet().stream()
                 .map(entry -> new CompanyUsersGroupDto(
-                        entry.getKey(),                      // companyId
-                        companyCuitMap.get(entry.getKey()), // companyCuit (Mapeado sin pérdidas de N/A)
-                        companyNameMap.get(entry.getKey()), // companyName
-                        entry.getValue()                     // employees (Lista elástica de sub-records)
+                        entry.getKey(),
+                        companyCuitMap.get(entry.getKey()),
+                        companyNameMap.get(entry.getKey()),
+                        entry.getValue()
                 ))
+                // Ordenamos directamente por el atributo del DTO ya creado
+                .sorted(Comparator.comparing(CompanyUsersGroupDto::companyName, Comparator.nullsLast(String::compareToIgnoreCase)))
                 .collect(Collectors.toList());
     }
 

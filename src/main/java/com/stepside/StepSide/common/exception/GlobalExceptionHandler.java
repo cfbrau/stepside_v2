@@ -1,11 +1,14 @@
 package com.stepside.StepSide.common.exception;
 
+import com.stepside.StepSide.common.exception.domain.DomainException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -40,15 +43,29 @@ public class GlobalExceptionHandler {
                         (existente, nuevo) -> existente // Mitiga colisiones de campos duplicados
                 ));
 
-        ErrorResponseDto errorDto = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Error de Validación",
-                "El JSON enviado no cumple con las restricciones de la plataforma.",
-                request.getRequestURI(),
+        return buildErrorResponse(
+                HttpStatus.BAD_REQUEST,
+                "VALIDATION_ERROR",
+                "Los datos enviados no son válidos.",
+                request,
                 errors
         );
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorDto);
+    }
+
+    /**
+     * Captura cuerpos HTTP con JSON mal formado o ilegible.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponseDto> handleHttpMessageNotReadableException(
+            HttpMessageNotReadableException ex, HttpServletRequest request) {
+
+        return buildErrorResponse(
+                HttpStatus.BAD_REQUEST,
+                "MALFORMED_JSON",
+                "El cuerpo de la solicitud no es un JSON válido.",
+                request,
+                null
+        );
     }
 
     /**
@@ -58,15 +75,45 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponseDto> handleNoSuchElementException(
             NoSuchElementException ex, HttpServletRequest request) {
 
-        ErrorResponseDto errorDto = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.NOT_FOUND.value(),
-                "Recurso No Encontrado",
-                ex.getMessage(),
-                request.getRequestURI(),
+        return buildErrorResponse(
+                HttpStatus.NOT_FOUND,
+                "RESOURCE_NOT_FOUND",
+                "Recurso no encontrado.",
+                request,
                 null
         );
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorDto);
+    }
+
+    /**
+     * Captura las excepciones de dominio con código HTTP explícito y formato estándar.
+     */
+    @ExceptionHandler(DomainException.class)
+    public ResponseEntity<ErrorResponseDto> handleDomainException(
+            DomainException ex, HttpServletRequest request) {
+
+        return buildErrorResponse(
+                ex.getStatus(),
+                ex.getCode(),
+                ex.getMessage(),
+                request,
+                null
+        );
+    }
+
+    /**
+     * Captura credenciales inválidas en endpoints de autenticación.
+     */
+    @ExceptionHandler(BadCredentialsException.class)
+    public ResponseEntity<ErrorResponseDto> handleBadCredentialsException(
+            BadCredentialsException ex, HttpServletRequest request) {
+
+        return buildErrorResponse(
+                HttpStatus.UNAUTHORIZED,
+                "INVALID_CREDENTIALS",
+                "Credenciales inválidas.",
+                request,
+                null
+        );
     }
 
     /**
@@ -76,15 +123,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponseDto> handleAccessDeniedException(
             AccessDeniedException ex, HttpServletRequest request) {
 
-        ErrorResponseDto errorDto = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.FORBIDDEN.value(),
-                "Acceso Denegado",
-                "Su jerarquía de acceso no cuenta con los privilegios requeridos para este endpoint.",
-                request.getRequestURI(),
+        return buildErrorResponse(
+                HttpStatus.FORBIDDEN,
+                "ACCESS_DENIED",
+                "Acceso denegado.",
+                request,
                 null
         );
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorDto);
     }
 
     /**
@@ -104,15 +149,13 @@ public class GlobalExceptionHandler {
             userMessage = "Error de Registro: Los identificadores o credenciales ya se encuentran asociados a una entidad activa.";
         }
 
-        ErrorResponseDto errorDto = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.CONFLICT.value(),
-                "Conflicto de Datos",
-                userMessage,
-                request.getRequestURI(),
+        return buildErrorResponse(
+                HttpStatus.CONFLICT,
+                "DATA_CONFLICT",
+                "Conflicto de datos.",
+                request,
                 null
         );
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorDto);
     }
 
     /**
@@ -122,15 +165,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponseDto> handleNoResourceFoundException(
             NoResourceFoundException ex, HttpServletRequest request) {
 
-        ErrorResponseDto errorDto = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.NOT_FOUND.value(),
-                "Ruta Inexistente",
-                "El endpoint al que intenta acceder no existe en la plataforma.",
-                request.getRequestURI(),
+        return buildErrorResponse(
+                HttpStatus.NOT_FOUND,
+                "ROUTE_NOT_FOUND",
+                "Ruta inexistente.",
+                request,
                 null
         );
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorDto);
     }
 
     /**
@@ -140,15 +181,14 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponseDto> handleIllegalArgumentException(
             IllegalArgumentException ex, HttpServletRequest request) {
 
-        ErrorResponseDto errorDto = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.BAD_REQUEST.value(),
-                "Solicitud Incorrecta",
-                ex.getMessage(),
-                request.getRequestURI(),
+        log.error("Error procesando la solicitud", ex);        
+        return buildErrorResponse(
+                HttpStatus.BAD_REQUEST,
+                "BAD_REQUEST",
+                "Solicitud incorrecta.",
+                request,
                 null
         );
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorDto);
     }
 
     /**
@@ -162,14 +202,30 @@ public class GlobalExceptionHandler {
         log.error("[FALLO NO CONTROLADO] Incidente crítico perimetral detectado en el path: {} | Detalle: ",
                 request.getRequestURI(), ex);
 
-        ErrorResponseDto errorDto = new ErrorResponseDto(
-                LocalDateTime.now(),
-                HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                "Error Interno del Servidor",
-                "Ocurrió un error imprevisto en la plataforma. Por favor, contacte soporte técnico utilizando el timestamp de telemetría.",
-                request.getRequestURI(),
+        return buildErrorResponse(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "INTERNAL_SERVER_ERROR",
+                "Error interno del servidor.",
+                request,
                 null
         );
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorDto);
+    }
+
+    private ResponseEntity<ErrorResponseDto> buildErrorResponse(
+            HttpStatus status,
+            String error,
+            String message,
+            HttpServletRequest request,
+            Map<String, String> validations) {
+
+        ErrorResponseDto errorDto = new ErrorResponseDto(
+                LocalDateTime.now(),
+                status.value(),
+                error,
+                message,
+                request.getRequestURI(),
+                validations
+        );
+        return ResponseEntity.status(status).body(errorDto);
     }
 }

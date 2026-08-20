@@ -1,7 +1,6 @@
 package com.stepside.StepSide.users.service;
 
 import com.stepside.StepSide.users.dto.CompanyUsersGroupDto;
-import com.stepside.StepSide.users.dto.UserApprovalRequestDTO;
 import com.stepside.StepSide.users.dto.UserResponseDTO;
 import java.util.List;
 
@@ -24,5 +23,10 @@ public interface UserService {
     /**
      * Ejecuta la aprobación atómica de una cuenta de usuario.
      */
-    void approveUser(String userId, UserApprovalRequestDTO requestDto);
+    void approveUser(String userId);
+
+    /**
+     * Ejecuta la baja lógica atómica de una cuenta de usuario.
+     */
+    void deactivateUser(String userId);
 }

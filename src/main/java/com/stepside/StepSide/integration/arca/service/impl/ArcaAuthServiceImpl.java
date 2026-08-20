@@ -100,25 +100,6 @@ public class ArcaAuthServiceImpl {
                 "</soapenv:Envelope>";
     }
 
-//    private String buildLoginTicketXml() {
-//        LocalDateTime now = LocalDateTime.now();
-//        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
-//
-//        String signerDN = "serialNumber=CUIT " + this.cuitRepresentada.trim() + ",cn=consulta_cuit";
-//        String dstDN = "cn=wsaa,o=afip,c=ar,serialNumber=CUIT 33693450239";
-//
-//        return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
-//                "<loginTicketRequest version=\"1.0\">\n" +
-//                "  <header>\n" +
-//                "    <source>" + signerDN + "</source>\n" +
-//                "    <destination>" + dstDN + "</destination>\n" +
-//                "    <uniqueId>" + (System.currentTimeMillis() / 1000) + "</uniqueId>\n" +
-//                "    <generationTime>" + now.minusMinutes(5).format(formatter) + "-03:00</generationTime>\n" +
-//                "    <expirationTime>" + now.plusHours(2).format(formatter) + "-03:00</expirationTime>\n" +
-//                "  </header>\n" +
-//                "  <service>ws_sr_padron_a13</service>\n" +
-//                "</loginTicketRequest>";
-//    }
 private String buildLoginTicketXml() {
     // SOLUCIÓN: Forzamos a Java a calcular la hora de Buenos Aires de forma agnóstica al entorno
     java.time.ZoneId zoneArgentina = java.time.ZoneId.of("America/Argentina/Buenos_Aires");

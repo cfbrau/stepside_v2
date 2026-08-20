@@ -4,6 +4,7 @@ import com.stepside.StepSide.ttos.dto.TtoRegistrationRequestDto;
 import com.stepside.StepSide.ttos.dto.TtoRegistrationResponseDto;
 import com.stepside.StepSide.ttos.model.Tto;
 import com.stepside.StepSide.ttos.repository.TtoRepository;
+import com.stepside.StepSide.users.domain.Email;
 import com.stepside.StepSide.users.model.User;
 import com.stepside.StepSide.users.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -29,9 +30,12 @@ public class TtoRegistrationServiceImpl implements TtoRegistrationService {
     @Override
     public TtoRegistrationResponseDto registerEcosystemUser(TtoRegistrationRequestDto requestDto) {
 
+        Email email = new Email(requestDto.email());
+        String normalizedEmail = email.value();
+
         // 1. REGLA DE PROTECCIÓN PERIMETRAL: Validar unicidad del E-mail
-        if (userRepository.findByEmail(requestDto.email()).isPresent()) {
-            throw new IllegalArgumentException("Conflicto de seguridad: El e-mail '" + requestDto.email() + "' ya posee una cuenta registrada.");
+        if (userRepository.findByEmail(normalizedEmail).isPresent()) {
+            throw new IllegalArgumentException("Conflicto de seguridad: El e-mail '" + normalizedEmail + "' ya posee una cuenta registrada.");
         }
 
         // 2. EXTRACCIÓN DINÁMICA DE CÓDIGOS NATURALES DESDE LOS MAPAS NOSQL
@@ -101,7 +105,7 @@ public class TtoRegistrationServiceImpl implements TtoRegistrationService {
         // 6. PERSISTENCIA PASO A PASO: CUENTA DE USUARIO CANDADO (PENDING_APPROVAL)
         // ============================================================================
         User newUser = new User();
-        newUser.setEmail(requestDto.email().trim().toLowerCase());
+        newUser.setEmail(normalizedEmail);
         newUser.setPassword(passwordEncoder.encode(requestDto.password())); // Cifrado simétrico BCrypt
         newUser.setStatusName("PENDING"); // Clavamos el peaje administrativo solicitado
         newUser.setTtoId(savedPerson.getId()); // Amarramos la cuenta al String ID de la persona
