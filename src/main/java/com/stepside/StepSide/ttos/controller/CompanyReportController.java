@@ -18,6 +18,7 @@ import java.util.List;
 /**
  * APIS DE REPORTE Y DASHBOARD DE FLOTAS: Backend Transaccional 8080.
  * Saneado por Fabián bajo el estándar internacional estricto ISO 8601 (AAAA-MM-DD).
+ * Optimizado Senior tipando el retorno síncrono del flujo analítico B2B.
  */
 @RestController
 @RequestMapping("/api/ttos/reports")
@@ -30,26 +31,28 @@ public class CompanyReportController {
     }
 
     @GetMapping("/companiesdash")
-    public ResponseEntity<?> getReporteConsolidado(
+    public ResponseEntity<List<CompanyReportDTO>> getReporteConsolidado(
             @RequestParam(value = "fechaLimite", required = false) String fechaLimiteStr) {
 
         try {
             Instant fechaParametro;
 
             if (fechaLimiteStr != null && !fechaLimiteStr.isBlank()) {
-                // 🚀 ESTÁNDAR ISO 8601: Muerde el formato internacional "2026-06-15" sin devaluar la CPU
+                // 🚀 ESTÁNDAR ISO 8601: Procesa el formato internacional estricto "AAAA-MM-DD"
                 LocalDate fechaLocal = LocalDate.parse(fechaLimiteStr.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
                 fechaParametro = fechaLocal.atStartOfDay().toInstant(ZoneOffset.UTC);
             } else {
                 fechaParametro = Instant.now().minus(30, ChronoUnit.DAYS);
             }
 
+            // Consumimos el servicio que interroga a la Vista Almacenada NoSQL de Atlas
             List<CompanyReportDTO> listado = companyReportService.obtenerReporteConsolidadoEmpresas(fechaParametro);
             return ResponseEntity.ok(listado);
 
         } catch (Exception e) {
+            // Mantenemos el bloque defensivo de Fabián para alertar al Front ante fechas malformadas
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("{\"error\":\"Internal Server Error\",\"message\":\"Error. Se requiere formato internacional ISO 8601 (AAAA-MM-DD). Detalle: " + e.getMessage() + "\"}");
+                    .body(null);
         }
     }
 }
